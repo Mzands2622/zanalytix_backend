@@ -35,7 +35,6 @@ class MasterTable:
         self.Disease_Area = disease_area
         self.Phase_Commencement_Date=phase_commencement_date
 
-
 def fetch_with_zyte(url):
     api_key = '674ce168a19e42d9ac0e039e9d9ded63'
 
@@ -169,85 +168,72 @@ def process_and_translate_row(treatment_data, cursor, treatment_key):
         raise
 
 
-
-
-
-def compare_daily_tables():
-    today = datetime.now().strftime('%Y%m%d')
-    yesterday = (datetime.now() - timedelta(1)).strftime('%Y%m%d')
-
-    server = 'scrapedtreatmentsdatabase.database.windows.net'
-    database = 'scrapedtreatmentssqldatabase'
-    username = 'mzandi'
-    password = 'Ranger22!'
-    driver = '{ODBC Driver 18 for SQL Server}'
-    today_table = f'{today}_MasterTable'
-    yesterday_table = f'{yesterday}_MasterTable'
-
-    conn_str = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
-    
+def compare_and_update_notifications():
     try:
-        conn = pyodbc.connect(conn_str)
-        setup_database(conn)  # Ensure all database structures are ready
+        # Database connection setup
+        server = 'scrapedtreatmentsdatabase.database.windows.net'
+        database = 'scrapedtreatmentssqldatabase'
+        username = 'mzandi'
+        password = 'Ranger22!'
+        driver = '{ODBC Driver 18 for SQL Server}'
 
-        cursor = conn.cursor()
-        query_today = f"SELECT * FROM [{today_table}]"
-        query_yesterday = f"SELECT * FROM [{yesterday_table}]"
-        cursor.execute(query_today)
-        today_data = cursor.fetchall()
-        columns = [column[0] for column in cursor.description if column[0] not in ('Last_Checked', 'Date_Scraped')]
-        
-        cursor.execute(query_yesterday)
-        yesterday_data = cursor.fetchall()
+        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
+        connection = pyodbc.connect(connection_string)
+        cursor = connection.cursor()
 
-        # Convert fetched data into dictionaries for easier comparison
-        today_dict = {row.Identification_Key: row for row in today_data}
-        yesterday_dict = {row.Identification_Key: row for row in yesterday_data}
+        # Fetch all treatment data
+        cursor.execute("SELECT Treatment_Key, Treatment_Data FROM Revised_MasterTable")
+        all_data = cursor.fetchall()
 
-        # Identify changes
-        all_keys = set(today_dict.keys()).union(yesterday_dict.keys())
-        for key in all_keys:
-            if key not in yesterday_dict:
-                # Log each column individually for added rows
-                for column in columns:
-                    new_value = getattr(today_dict[key], column)
-                    log_changes(conn, 'Added', column, None, new_value, {}, key)
-            elif key not in today_dict:
-                # Log each column individually for deleted rows
-                for column in columns:
-                    old_value = getattr(yesterday_dict[key], column)
-                    log_changes(conn, 'Deleted', column, old_value, None, {}, key)
+        # Convert data to dictionaries for easier comparison
+        data_dict = {row[0]: json.loads(row[1]) for row in all_data}
+
+        # Compare records and update notifications
+        for treatment_key, treatment_list in data_dict.items():
+            # Assuming the last entry is the latest
+            latest_record = treatment_list[-1]
+            latest_date, latest_details = list(latest_record.items())[0]
+
+            changes = []
+
+            for field, value in latest_details.items():
+                if field == 'Date_Scraped' or field == 'App_Notification':
+                    continue  # Skip comparison for Date_Scraped
+
+                # Compare with previous records if available
+                for previous_record in treatment_list[:-1]:
+                    previous_date, previous_details = list(previous_record.items())[0]
+                    previous_value = previous_details.get(field)
+                    if value != previous_value:
+                        changes.append(f"{field} changed from {previous_value} to {value}")
+
+            if changes:
+                notification = "; ".join(changes)
             else:
-                for column in columns:
-                    old_value = getattr(yesterday_dict[key], column)
-                    new_value = getattr(today_dict[key], column)
-                    if old_value != new_value:
-                        log_changes(conn, 'Updated', column, old_value, new_value, {}, key)
+                notification = "No changes detected"
+            
+                # Create and add the App_Notification
+                app_notification_translator = MultilingualData()
+                app_notification_translator.add_translation("en", notification)
+                app_notification_collection = MultilingualDataCollection()
+                app_notification_collection.add_data(app_notification_translator)
+            
+                latest_details['App_Notification'] = json.dumps([{"en": notification}], ensure_ascii=False)
 
+                # Update the treatment data with the new notification
+                updated_json = json.dumps(treatment_list, ensure_ascii=False)
+                update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
+                cursor.execute(update_query, (updated_json, treatment_key))
+
+        connection.commit()
     except Exception as e:
-        logging.error(f"Error accessing database: {e}")
+        logging.error(f"An error occurred during comparison and update: {e}")
     finally:
-        conn.close()
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
 
-
-# Each call to log_changes will commit a new entry to your ChangeLog table with detailed information about the change.
-
-
-def log_changes(conn, change_type, column_name, old_value, new_value, additional_details, identification_key):
-    cursor = conn.cursor()
-    query = """
-        INSERT INTO ChangeLog (
-            Change_Type,
-            Column_Name,
-            Old_Value,
-            New_Value,
-            Additional_Details,
-            Date_Recorded,
-            Identification_Key
-        ) VALUES (?, ?, ?, ?, ?, GETDATE(), ?)
-    """
-    cursor.execute(query, (change_type, column_name, old_value, new_value, json.dumps(additional_details, default=str), identification_key))
-    conn.commit()
 
 def abbvie_data():
     try:
@@ -1748,15 +1734,8 @@ def table_insertion(treatments, html_content, company_name):
         for treatment in treatments:
             treatment_key = treatment['Identification_Key']
 
-            app_notification_translator = MultilingualData()
-            app_notification_translator.add_translation("en", "")
-            app_notification_collection = MultilingualDataCollection()
-            app_notification_collection.add_data(app_notification_translator)
-            
-            treatment['App_Notification'] = app_notification_collection.get_collection_as_json()
-
             # Format the treatment data for today
-            new_data = {"20240729": treatment}
+            new_data = {today: treatment}
             
             # Check if a record exists
             cursor.execute("SELECT Treatment_Data FROM Revised_MasterTable WHERE Treatment_Key = ?", (treatment_key,))
@@ -1842,28 +1821,6 @@ def clear_remake_tables():
     except Exception as e:
         logging.error(f"An error occurred during database setup: {e}")
         logging.error(f"An error occurred: {e}")
-
-
-def setup_database(conn):
-    cursor = conn.cursor()
-    cursor.execute("""
-        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ChangeLog')
-        CREATE TABLE ChangeLog (
-            Change_ID INT IDENTITY(1,1) PRIMARY KEY,
-            Change_Type NVARCHAR(255),
-            Column_Name NVARCHAR(255),
-            Old_Value NVARCHAR(MAX),
-            New_Value NVARCHAR(MAX),
-            Additional_Details NVARCHAR(MAX),
-            Date_Recorded DATETIME2,
-            Identification_Key NVARCHAR(MAX)
-        )
-    """)
-    conn.commit()
-
-    # Commit changes
-    conn.commit()
-
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -2014,18 +1971,14 @@ def translate_trigger(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="log_data_changes")
 def log_data_changes(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        logging.info('Starting the table comparison process.')
-        compare_daily_tables()
-        logging.info('Comparison process completed successfully.')
+        logging.info('Trigger fired: log_data_changes')
+        
+        # Call the compare_and_update_notifications function
+        compare_and_update_notifications()
+        
         return func.HttpResponse(
-            "Comparison process completed successfully.",
+            "Data comparison and update completed successfully.",
             status_code=200
-        )
-    except pyodbc.Error as e:
-        logging.error(f"Database error: {e}")
-        return func.HttpResponse(
-            f"Database error: {e}",
-            status_code=500
         )
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
