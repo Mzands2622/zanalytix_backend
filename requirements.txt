@@ -1,0 +1,6 @@
+azure-functions
+beautifulsoup4==4.12.3
+soupsieve==2.5
+requests
+pyodbc
+translate
