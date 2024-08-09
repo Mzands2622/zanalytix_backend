@@ -2,6 +2,8 @@ import pyodbc
 import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from dateutil.rrule import rrulestr, rrule
+from datetime import datetime
 
 
 
@@ -61,6 +63,8 @@ def add_scraping_object():
                 (data['companyId'], data['companyName'], data['headquartersLocalTime'], new_objects))
 
         conn.commit()
+        scraping_object = request.json['scrapingObject']
+        add_to_calendar(scraping_object)
         return jsonify({'status': 'success', 'data': data}), 200
 
     except pyodbc.Error as e:
@@ -90,7 +94,7 @@ def delete_scraping_object(company_id, object_code):
         conn = pyodbc.connect(connection_string)
         cursor = conn.cursor()
 
-        # Fetch the current scraping objects from the profile
+        # Step 1: Remove the scraping object from the Profile_Table
         cursor.execute("SELECT Scraping_Objects FROM Profile_Table WHERE Company_ID = ?", (company_id,))
         result = cursor.fetchone()
         if result:
@@ -99,16 +103,45 @@ def delete_scraping_object(company_id, object_code):
             updated_objects = [obj for obj in current_objects if obj['objectCode'] != object_code]
             updated_json = json.dumps(updated_objects)
 
-            # Update the database with the new list
+            # Update the Profile_Table with the new list
             cursor.execute("UPDATE Profile_Table SET Scraping_Objects = ? WHERE Company_ID = ?", (updated_json, company_id))
-            conn.commit()
-            return jsonify({'status': 'success', 'message': 'Object deleted successfully'}), 200
-        else:
-            return jsonify({'status': 'error', 'message': 'Company not found'}), 404
+        
+        # Step 2: Remove the scraping object from the Calendar table
+        cursor.execute("SELECT Time, Scraping_Objects FROM Calendar")
+        calendar_rows = cursor.fetchall()
+
+        for row in calendar_rows:
+            time, scraping_objects_json = row
+            scraping_objects = json.loads(scraping_objects_json)
+
+            # Filter out the object to be deleted from the current scraping objects
+            updated_scraping_objects = [obj for obj in scraping_objects if obj['objectCode'] != object_code]
+
+            if len(updated_scraping_objects) != len(scraping_objects):
+                if updated_scraping_objects:
+                    # Update the Calendar table with the updated scraping objects
+                    updated_scraping_objects_json = json.dumps(updated_scraping_objects)
+                    cursor.execute("""
+                        UPDATE Calendar 
+                        SET Scraping_Objects = ?
+                        WHERE Time = ?
+                    """, (updated_scraping_objects_json, time))
+                else:
+                    # If no scraping objects remain for that time, delete the row
+                    cursor.execute("""
+                        DELETE FROM Calendar 
+                        WHERE Time = ?
+                    """, (time,))
+
+        conn.commit()
+        return jsonify({'status': 'success', 'message': 'Object deleted successfully'}), 200
 
     except pyodbc.Error as e:
         print("Database error:", str(e))
         return jsonify({'status': 'error', 'message': 'Database error: ' + str(e)}), 500
+    except Exception as e:
+        print("Error during processing:", str(e))
+        return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
         if cursor:
             cursor.close()
@@ -162,6 +195,8 @@ def update_scraping_object(company_id, object_code):
                 WHERE Company_ID = ?
             """, (updated_objects_json, company_id))
             conn.commit()
+            scraping_object = request.json['scrapingObject']
+            add_to_calendar(scraping_object)
             return jsonify({'status': 'success', 'message': 'Scraping object updated successfully'}), 200
         else:
             return jsonify({'status': 'error', 'message': 'No such company found'}), 404
@@ -178,7 +213,59 @@ def update_scraping_object(company_id, object_code):
         if conn:
             conn.close()
 
+def add_to_calendar(scraping_object):
+    print(scraping_object)
+    try:
+        rrule_string = scraping_object['objectFrequency']
+        rule = rrulestr(rrule_string)
+        dates = list(rule)[:30]  # Limit to the first 30 dates to manage data growth
+        print(dates)
 
+        # Database connection setup
+        server = 'scrapedtreatmentsdatabase.database.windows.net'
+        database = 'scrapedtreatmentssqldatabase'
+        username = 'mzandi'
+        password = 'Ranger22!'
+        driver = '{ODBC Driver 17 for SQL Server}'
+        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
+        conn = pyodbc.connect(connection_string)
+        cursor = conn.cursor()
+
+        for date in dates:
+            # Adjust time based on frequency directly in the loop
+            if 'HOURLY' in rrule_string:
+                date = date.replace(minute=0, second=0, microsecond=0)  # Reset time to the start of the hour
+            elif 'MINUTELY' in rrule_string:
+                date = date.replace(second=0, microsecond=0)  # Reset time to the start of the minute
+            elif 'DAILY' in rrule_string or 'WEEKLY' in rrule_string or 'MONTHLY' in rrule_string or 'YEARLY' in rrule_string:
+                date = date.replace(hour=0, minute=0, second=0, microsecond=0)  # Reset time to midnight
+
+            date_str = date.strftime('%Y-%m-%d %H:%M:%S')
+
+            cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time = ?", (date_str,))
+            result = cursor.fetchone()
+
+            if result:
+                current_objects = json.loads(result[0])
+                # Update existing or append new object
+                updated_objects = [obj if obj['objectCode'] != scraping_object['objectCode'] else scraping_object for obj in current_objects]
+                if scraping_object not in updated_objects:
+                    updated_objects.append(scraping_object)
+                cursor.execute("UPDATE Calendar SET Scraping_Objects = ? WHERE Time = ?", (json.dumps(updated_objects), date_str))
+            else:
+                # Create a new entry if it doesn't exist
+                new_objects = json.dumps([scraping_object])
+                cursor.execute("INSERT INTO Calendar (Time, Scraping_Objects) VALUES (?, ?)", (date_str, new_objects))
+
+        conn.commit()
+
+    except Exception as e:
+        print("Error in add_to_calendar:", str(e))
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
