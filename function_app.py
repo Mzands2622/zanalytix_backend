@@ -10,7 +10,6 @@ from cleanup_text import clean_text
 import json
 
 
-
 class MasterTable:
     def __init__(self, company_name="Null", therapeutic_area="Null", treatment_name="Null", target="Null",
                  type_of_molecule="Null",
@@ -235,7 +234,7 @@ def compare_and_update_notifications():
             connection.close()
 
 
-def abbvie_data():
+def abbvie_pipeline():
     try:
         web = "https://www.abbvie.com/science/pipeline.html"
         html_content = fetch_with_zyte(web)
@@ -311,7 +310,7 @@ def abbvie_data():
         return [], None
 
 
-def bayer_data():
+def bayer_pipeline():
     try:
         web = "https://www.bayer.com/en/pharma/development-pipeline"
         html_content = fetch_with_zyte(web)
@@ -373,7 +372,7 @@ def bayer_data():
         return []
 
 
-def boehringer_ingelheim_data():
+def boehringer_ingelheim_pipeline():
     try:
         url = "https://www.boehringer-ingelheim.com/boehringer-ingelheim-human-pharma-clinical-pipeline-dynamic"
         html_content = fetch_with_zyte(url)
@@ -454,7 +453,7 @@ def boehringer_ingelheim_data():
         return []
 
 
-def bms_data():
+def bms_pipeline():
     url = "https://www.bms.com/researchers-and-partners/in-the-pipeline.html"
     html_content = fetch_with_zyte(url)
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -561,7 +560,7 @@ def bms_data():
     return treatments, html_content
 
 
-def gilead_data():
+def gilead_pipeline():
     try:
         url = "https://www.gilead.com/science-and-medicine/pipeline"
         html_content = fetch_with_zyte(url)
@@ -661,7 +660,7 @@ def gilead_data():
         return [], None
 
 
-def gsk_data():
+def gsk_pipeline():
     try:
         url = "https://www.gsk.com/en-gb/innovation/pipeline/"
         html_content = fetch_with_zyte(url)
@@ -748,7 +747,7 @@ def gsk_data():
         return [], None
 
 
-def johnson_johnson_data():
+def johnson_johnson_pipeline():
     try:
         url = "https://www.investor.jnj.com/pipeline/development-pipeline/default.aspx"
         html_content = fetch_with_zyte(url)
@@ -807,7 +806,7 @@ def johnson_johnson_data():
         return [], None
 
 
-def merck_data():
+def merck_pipeline():
     try:
         url = "https://www.merck.com/research/product-pipeline/"
         html_content = fetch_with_zyte(url)
@@ -911,7 +910,7 @@ def merck_data():
         return [], None
 
 
-def novartis_data():
+def novartis_pipeline():
     try:
         # Base URL and start page setup
         start_page = '0'
@@ -998,7 +997,7 @@ def novartis_data():
         return [], None
 
 
-def novo_nordisk_data():
+def novo_nordisk_pipeline():
     try:
         # URL of the webpage to scrape
         web = "https://www.novonordisk.com/science-and-technology/r-d-pipeline.html"
@@ -1091,7 +1090,7 @@ def novo_nordisk_data():
         return [], None
 
 
-def pfizer_data():
+def pfizer_pipeline():
     try:
         base_url = "https://www.pfizer.com/v1/pipeline/filter"
         html_content = fetch_with_zyte(base_url)
@@ -1195,7 +1194,7 @@ def pfizer_data():
         return [], None
 
 
-def sanofi_data():
+def sanofi_pipeline():
     try:
         import requests
         from bs4 import BeautifulSoup
@@ -1270,7 +1269,7 @@ def sanofi_data():
         print("An error occurred scraping Sanofi's pipeline:", e)
         return [], None
 
-def sanofi_data_french():
+def sanofi_pipeline_french():
     try:
         import requests
         from bs4 import BeautifulSoup
@@ -1348,7 +1347,7 @@ def sanofi_data_french():
 
 
 
-def teva_data():
+def teva_pipeline():
     try:
         web = "https://www.tevapharm.com/product-focus/research/pipeline/"
         html_content = fetch_with_zyte(web)
@@ -1443,7 +1442,7 @@ def teva_data():
         print("An error occurred scraping Teva Pharmaceutical's pipeline", e)
         return []
 
-def astrazeneca_data():
+def astrazeneca_pipeline():
     try:
         web = "https://www.astrazeneca.com/our-therapy-areas/pipeline.html"
         html_content = fetch_with_zyte(web)
@@ -1543,7 +1542,7 @@ def astrazeneca_data():
         print("An error occurred scraping AstraZeneca's Pharmaceutical's pipeline", e)
         return []
 
-def amgen_data():
+def amgen_pipeline():
     try:
         web = "https://www.amgenpipeline.com/"
         html_content = fetch_with_zyte(web)
@@ -1827,79 +1826,60 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 @app.function_name(name="HttpTrigger1")
 @app.route(route="http_trigger")
 def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    
     logging.info('Python HTTP trigger function processed a request.')
 
     try:
         logging.info("Starting clear_remake_tables function.")
         clear_remake_tables()
         logging.info("Finished clear_remake_tables function.")
-
-        # gsk, gsk_content = gsk_data()
-        # logging.info('Inserting GSK plc data...')
-        # table_insertion(gsk, gsk_content, "GSK plc")
-
-        # abbvie, abbvie_content = abbvie_data()
-        # logging.info('Inserting AbbVie data...')
-        # table_insertion(abbvie, abbvie_content, "AbbVie")
-
-        # bayer, bayer_content = bayer_data()
-        # logging.info('Inserting Bayer data...')
-        # table_insertion(bayer, bayer_content, "Bayer Therapeutics")
-
-        # boehringer, boehringer_content = boehringer_ingelheim_data()
-        # logging.info('Inserting Boehringer Ingelheim data...')
-        # table_insertion(boehringer, boehringer_content, "Boehringer Ingelheim")
-
-        # bms, bms_content = bms_data()
-        # logging.info('Inserting Bristol-Myers Squibb data...')
-        # table_insertion(bms, bms_content, "Bristol-Myers Squibb")
-
-        # gilead, gilead_content = gilead_data()
-        # logging.info('Inserting Gilead Sciences data...')
-        # table_insertion(gilead, gilead_content, "Gilead Sciences")
-
-        # johnson_johnson, johnson_johnson_content = johnson_johnson_data()
-        # logging.info('Inserting Johnson&Johnson data...')
-        # table_insertion(johnson_johnson, johnson_johnson_content, "Johnson&Johnson")
-
-        # merck, merck_content = merck_data()
-        # logging.info('Inserting Merck & Co. data...')
-        # table_insertion(merck, merck_content, "Merck & Co.")
-
-        # novartis, novartis_content = novartis_data()
-        # logging.info('Inserting Novartis data...')
-        # table_insertion(novartis, novartis_content, "Novartis")
-
-        # novo_nordisk, novo_nordisk_content = novo_nordisk_data()
-        # logging.info('Inserting Novo Nordisk data...')
-        # table_insertion(novo_nordisk, novo_nordisk_content, "Novo Nordisk")
-
-        # pfizer, pfizer_content = pfizer_data()
-        # logging.info('Inserting Pfizer data...')
-        # table_insertion(pfizer, pfizer_content, "Pfizer")
-
-        sanofi, sanofi_content = sanofi_data()
-        logging.info('Inserting Sanofi data...')
-        table_insertion(sanofi, sanofi_content, "Sanofi")
         
-        sanofi, sanofi_content = sanofi_data_french()
-        logging.info('Inserting Sanofi data (French)...')
-        table_insertion(sanofi, sanofi_content, "Sanofi")
+        # Set the current time to test
+        current_time = datetime(2024, 8, 9, 0, 0, 0, 0)
+        logging.info(f"Current time: {current_time}")
 
-        # teva, teva_content = teva_data()
-        # logging.info('Inserting Teva Pharmaceutical Industries data...')
-        # table_insertion(teva, teva_content, "Teva Pharmaceutical Industries")
+        # Database connection setup
+        server = 'scrapedtreatmentsdatabase.database.windows.net'
+        database = 'scrapedtreatmentssqldatabase'
+        username = 'mzandi'
+        password = 'Ranger22!'
+        driver = '{ODBC Driver 18 for SQL Server}'
+        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
+        conn = pyodbc.connect(connection_string)
+        cursor = conn.cursor()
 
-        # astrazeneca, astrazeneca_content = astrazeneca_data()
-        # logging.info('Inserting AstraZeneca data...')
-        # table_insertion(astrazeneca, astrazeneca_content, "AstraZeneca")
+        cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time = ?", (current_time,))
+        result = cursor.fetchone()
+
+        if result:
+            scraping_objects = json.loads(result[0])
+            logging.info(f"Scraping objects found: {scraping_objects}")
+            
+            for obj in scraping_objects:
+                object_code = obj['objectCode']
+                logging.info(f"Object Code: {object_code}")
+                
+                # Attempt to find the function by name
+                func = globals().get(object_code)
+                
+                if func:
+                    logging.info(f"Executing function for {object_code}")
+                    # Call the scraping function
+                    data, content = func()  # Assuming each scraping function returns a tuple (data, content)
+                    
+                    # Extract the first word from objectDescription for the table name
+                    table_name = obj['objectDescription'].split()[0]
+                    
+                    # Call the table insertion function
+                    logging.info(f'Inserting data for {table_name}...')
+                    table_insertion(data, content, table_name)
+                else:
+                    logging.error(f"No function matched for {object_code}")
+        else:
+            logging.info("No matching objects found in the Calendar table.")
         
-        logging.info('All data processed and inserted successfully.')
-
-        return func.HttpResponse(
-            "All data processed and inserted successfully.",
-            status_code=200
-        )
+        logging.info("Before Return")
+        return json.dumps({"status": "success", "message": "All data processed and inserted successfully."})
 
     except Exception as e:
         logging.error(f"Error processing data: {e}")
@@ -1907,6 +1887,12 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
             f"Error processing data: {e}",
             status_code=500
         )
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
 
 @app.function_name(name="HttpTrigger2")
