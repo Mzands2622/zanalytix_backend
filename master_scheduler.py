@@ -218,7 +218,14 @@ def add_to_calendar(scraping_object):
     try:
         rrule_string = scraping_object['objectFrequency']
         rule = rrulestr(rrule_string)
-        dates = list(rule)[:30]  # Limit to the first 30 dates to manage data growth
+        
+        dates = []
+        for date in rule:
+            if date.year < 9999:  # Ensure date is within a valid range
+                dates.append(date)
+            if len(dates) >= 30:
+                break
+        
         print(dates)
 
         # Database connection setup
@@ -231,14 +238,39 @@ def add_to_calendar(scraping_object):
         conn = pyodbc.connect(connection_string)
         cursor = conn.cursor()
 
+        # First, remove the object from all dates where it currently exists but shouldn't anymore
+        cursor.execute("SELECT Time, Scraping_Objects FROM Calendar")
+        rows = cursor.fetchall()
+
+        for row in rows:
+            time = row[0]
+            current_objects = json.loads(row[1])
+
+            # Find the object and check if it still belongs on this date
+            updated_objects = []
+            for obj in current_objects:
+                if obj['objectCode'] == scraping_object['objectCode']:
+                    if time not in dates:  # If the time is not in the new dates, remove it
+                        continue
+                updated_objects.append(obj)
+
+            # If the list was modified, update the database
+            if len(updated_objects) != len(current_objects):
+                if updated_objects:
+                    cursor.execute("UPDATE Calendar SET Scraping_Objects = ? WHERE Time = ?", 
+                                   (json.dumps(updated_objects), time))
+                else:
+                    cursor.execute("DELETE FROM Calendar WHERE Time = ?", (time,))
+
+        # Then, reinsert the object according to the new schedule
         for date in dates:
-            # Adjust time based on frequency directly in the loop
+            # Adjust the time based on frequency directly in the loop
             if 'HOURLY' in rrule_string:
-                date = date.replace(minute=0, second=0, microsecond=0)  # Reset time to the start of the hour
+                date = date.replace(minute=0, second=0, microsecond=0)
             elif 'MINUTELY' in rrule_string:
-                date = date.replace(second=0, microsecond=0)  # Reset time to the start of the minute
+                date = date.replace(second=0, microsecond=0)
             elif 'DAILY' in rrule_string or 'WEEKLY' in rrule_string or 'MONTHLY' in rrule_string or 'YEARLY' in rrule_string:
-                date = date.replace(hour=0, minute=0, second=0, microsecond=0)  # Reset time to midnight
+                date = date.replace(hour=0, minute=0, second=0, microsecond=0)
 
             date_str = date.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -247,15 +279,15 @@ def add_to_calendar(scraping_object):
 
             if result:
                 current_objects = json.loads(result[0])
-                # Update existing or append new object
                 updated_objects = [obj if obj['objectCode'] != scraping_object['objectCode'] else scraping_object for obj in current_objects]
                 if scraping_object not in updated_objects:
                     updated_objects.append(scraping_object)
-                cursor.execute("UPDATE Calendar SET Scraping_Objects = ? WHERE Time = ?", (json.dumps(updated_objects), date_str))
+                cursor.execute("UPDATE Calendar SET Scraping_Objects = ? WHERE Time = ?", 
+                               (json.dumps(updated_objects), date_str))
             else:
-                # Create a new entry if it doesn't exist
                 new_objects = json.dumps([scraping_object])
-                cursor.execute("INSERT INTO Calendar (Time, Scraping_Objects) VALUES (?, ?)", (date_str, new_objects))
+                cursor.execute("INSERT INTO Calendar (Time, Scraping_Objects) VALUES (?, ?)", 
+                               (date_str, new_objects))
 
         conn.commit()
 
@@ -266,6 +298,7 @@ def add_to_calendar(scraping_object):
             cursor.close()
         if conn:
             conn.close()
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
