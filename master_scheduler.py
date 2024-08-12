@@ -4,11 +4,14 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dateutil.rrule import rrulestr, rrule
 from datetime import datetime
+from notifications import notifications_bp  # Import the Blueprint
 
 
 
 app = Flask(__name__)
 CORS(app)
+
+app.register_blueprint(notifications_bp)
 
 @app.route('/add-scraping-object', methods=['POST'])
 def add_scraping_object():

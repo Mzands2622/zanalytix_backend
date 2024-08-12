@@ -166,74 +166,6 @@ def process_and_translate_row(treatment_data, cursor, treatment_key):
         logging.error(f"Error processing treatment with key {treatment_key}: {e}")
         raise
 
-
-def compare_and_update_notifications():
-    try:
-        # Database connection setup
-        server = 'scrapedtreatmentsdatabase.database.windows.net'
-        database = 'scrapedtreatmentssqldatabase'
-        username = 'mzandi'
-        password = 'Ranger22!'
-        driver = '{ODBC Driver 18 for SQL Server}'
-
-        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
-        connection = pyodbc.connect(connection_string)
-        cursor = connection.cursor()
-
-        # Fetch all treatment data
-        cursor.execute("SELECT Treatment_Key, Treatment_Data FROM Revised_MasterTable")
-        all_data = cursor.fetchall()
-
-        # Convert data to dictionaries for easier comparison
-        data_dict = {row[0]: json.loads(row[1]) for row in all_data}
-
-        # Compare records and update notifications
-        for treatment_key, treatment_list in data_dict.items():
-            # Assuming the last entry is the latest
-            latest_record = treatment_list[-1]
-            latest_date, latest_details = list(latest_record.items())[0]
-
-            changes = []
-
-            for field, value in latest_details.items():
-                if field == 'Date_Scraped' or field == 'App_Notification':
-                    continue  # Skip comparison for Date_Scraped
-
-                # Compare with previous records if available
-                for previous_record in treatment_list[:-1]:
-                    previous_date, previous_details = list(previous_record.items())[0]
-                    previous_value = previous_details.get(field)
-                    if value != previous_value:
-                        changes.append(f"{field} changed from {previous_value} to {value}")
-
-            if changes:
-                notification = "; ".join(changes)
-            else:
-                notification = "No changes detected"
-            
-                # Create and add the App_Notification
-                app_notification_translator = MultilingualData()
-                app_notification_translator.add_translation("en", notification)
-                app_notification_collection = MultilingualDataCollection()
-                app_notification_collection.add_data(app_notification_translator)
-            
-                latest_details['App_Notification'] = json.dumps([{"en": notification}], ensure_ascii=False)
-
-                # Update the treatment data with the new notification
-                updated_json = json.dumps(treatment_list, ensure_ascii=False)
-                update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
-                cursor.execute(update_query, (updated_json, treatment_key))
-
-        connection.commit()
-    except Exception as e:
-        logging.error(f"An error occurred during comparison and update: {e}")
-    finally:
-        if cursor:
-            cursor.close()
-        if connection:
-            connection.close()
-
-
 def abbvie_pipeline():
     try:
         web = "https://www.abbvie.com/science/pipeline.html"
@@ -1723,7 +1655,7 @@ def table_insertion(treatments, html_content, company_name):
     connection = None
 
     # Get today's date for table name
-    today = datetime.now().strftime('%Y%m%d')
+    today = "20240813"
 
     try:
         # Connect to your Azure SQL Database
@@ -1835,7 +1767,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         logging.info("Finished clear_remake_tables function.")
         
         # Set the current time to test
-        current_time = datetime(2024, 8, 9, 0, 0, 0, 0)
+        current_time = datetime(2024, 8, 10, 0, 0, 0, 0)
         logging.info(f"Current time: {current_time}")
 
         # Database connection setup
@@ -1944,27 +1876,6 @@ def translate_trigger(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             f"Database error: {e}",
             status_code=500
-        )
-    except Exception as e:
-        logging.error(f"Unexpected error: {e}")
-        return func.HttpResponse(
-            f"Unexpected error: {e}",
-            status_code=500
-        )
-
-
-@app.function_name(name="HttpTrigger3")
-@app.route(route="log_data_changes")
-def log_data_changes(req: func.HttpRequest) -> func.HttpResponse:
-    try:
-        logging.info('Trigger fired: log_data_changes')
-        
-        # Call the compare_and_update_notifications function
-        compare_and_update_notifications()
-        
-        return func.HttpResponse(
-            "Data comparison and update completed successfully.",
-            status_code=200
         )
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
