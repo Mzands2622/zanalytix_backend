@@ -1655,7 +1655,8 @@ def table_insertion(treatments, html_content, company_name):
     connection = None
 
     # Get today's date for table name
-    today = "20240813"
+    today = datetime.now(timezone.utc).strftime('%Y%m%d')
+
 
     try:
         # Connect to your Azure SQL Database
@@ -1767,7 +1768,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         logging.info("Finished clear_remake_tables function.")
         
         # Set the current time to test
-        current_time = datetime(2024, 8, 10, 0, 0, 0, 0)
+        current_time = datetime.now(timezone.utc)
         logging.info(f"Current time: {current_time}")
 
         # Database connection setup
@@ -1780,7 +1781,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         conn = pyodbc.connect(connection_string)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time = ?", (current_time,))
+        cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time <= ?", (current_time,))
         result = cursor.fetchone()
 
         if result:
@@ -1810,7 +1811,8 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         else:
             logging.info("No matching objects found in the Calendar table.")
         
-        logging.info("Before Return")
+        logging.info("translate_trigger function called")
+        translate_trigger()
         return json.dumps({"status": "success", "message": "All data processed and inserted successfully."})
 
     except Exception as e:
@@ -1827,11 +1829,8 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
 
 
 
-@app.function_name(name="HttpTrigger2")
-@app.route(route="translate_trigger")
-def translate_trigger(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info("translate_trigger function called")
 
+def translate_trigger():
     server = 'scrapedtreatmentsdatabase.database.windows.net'
     database = 'scrapedtreatmentssqldatabase'
     username = 'mzandi'
@@ -1865,6 +1864,14 @@ def translate_trigger(req: func.HttpRequest) -> func.HttpResponse:
 
             conn.commit()
             logging.info("Translation processing completed and database updated")
+
+            try:
+                second_endpoint_url = "http://127.0.0.1:5000/trigger-notifications"
+                response = requests.get(second_endpoint_url)
+                response.raise_for_status()  # Raises an HTTPError if the response code was unsuccessful
+                logging.info("Second endpoint triggered successfully.")
+            except requests.exceptions.RequestException as e:
+                logging.error(f"Error calling the second endpoint: {e}")
 
         return func.HttpResponse(
             "Translation processing completed.",
