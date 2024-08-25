@@ -221,7 +221,7 @@ def delete_scraping_object(company_id, object_code):
 
 # Adding the scraping object to the calendar based on the schedule
 def add_to_calendar(scraping_object):
-    print(scraping_object)
+    print("hello")
     try:
         rrule_string = scraping_object['objectFrequency']
         rule = rrulestr(rrule_string)
@@ -298,6 +298,7 @@ def add_to_calendar(scraping_object):
 
         conn.commit()
 
+        print("Added scraping object to calendar successfully")
     except Exception as e:
         print("Error in add_to_calendar:", str(e))
     finally:
@@ -306,6 +307,10 @@ def add_to_calendar(scraping_object):
         if conn:
             conn.close()
 
+
+import pyodbc
+import json
+from flask import jsonify
 
 @scheduling_options_bp.route('/api/programmer-companies/<int:user_id>', methods=['GET'])
 def get_programmer_companies(user_id):
@@ -322,19 +327,35 @@ def get_programmer_companies(user_id):
         conn = pyodbc.connect(connection_string)
         cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT Companies FROM Programmers WHERE UserID = ?
-        """, (user_id,))
+        # First, get the companies for the user
+        cursor.execute("SELECT Companies FROM Programmers WHERE UserID = ?", (user_id,))
         result = cursor.fetchone()
 
-        if result:
-            companies = json.loads(result[0])  # Assuming `Companies` is stored as a JSON array
-            return jsonify(companies), 200
+        if result and result.Companies:
+            companies = json.loads(result.Companies)
+            
+            # Now, fetch the company IDs and names from Profile_Table
+            placeholders = ', '.join('?' for _ in companies)
+            query = f"""
+                SELECT Company_ID, Company_Name
+                FROM Profile_Table
+                WHERE Company_Name IN ({placeholders})
+            """
+            cursor.execute(query, companies)
+            
+            results = cursor.fetchall()
+            companies_data = [{"companyId": row.Company_ID, "companyName": row.Company_Name} for row in results]
+            
+            return jsonify(companies_data), 200
         else:
             return jsonify([]), 200
 
     except pyodbc.Error as e:
+        print(f"Database error: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
     finally:
         if cursor:
             cursor.close()
@@ -342,15 +363,13 @@ def get_programmer_companies(user_id):
             conn.close()
 
 
-
-
-@scheduling_options_bp.route('/api/company-details/<company_id>', methods=['GET'])
+@scheduling_options_bp.route('/api/company-details/<int:company_id>', methods=['GET'])
 def get_company_details(company_id):
     print(f"Received company_id: {company_id}")  # Log the company_id received
     conn = None
     cursor = None
     try:
-        # Database connection setup
+        # Database connection setup (unchanged)
         server = 'scrapedtreatmentsdatabase.database.windows.net'
         database = 'scrapedtreatmentssqldatabase'
         username = 'mzandi'
@@ -374,14 +393,18 @@ def get_company_details(company_id):
                 'companyLogo': result[1],
                 'pipelineLink': result[2],
                 'categories': json.loads(result[3]) if result[3] else [],
-                'scrapingObjects': json.loads(result[4]) if result[4] else []  # Fetch and parse Scraping_Objects
+                'scrapingObjects': json.loads(result[4]) if result[4] else []
             }
             return jsonify(company_details), 200
         else:
             return jsonify({'status': 'error', 'message': 'Company not found'}), 404
 
     except pyodbc.Error as e:
+        print(f"Database error: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return jsonify({'status': 'error', 'message': 'An unexpected error occurred'}), 500
     finally:
         if cursor:
             cursor.close()

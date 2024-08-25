@@ -8,6 +8,12 @@ import re
 from cleanup_phase import clean_phase
 from cleanup_text import clean_text
 import json
+from langchain_openai import ChatOpenAI
+from langchain.prompts import PromptTemplate
+import openai
+import re
+import smtplib
+from twilio.rest import Client
 
 
 class MasterTable:
@@ -123,48 +129,43 @@ def call_translation_api(text, source_lang, target_lang):
 
 def process_and_translate_row(treatment_data, cursor, treatment_key):
     try:
+        # Ensure treatment_data is a list
         if isinstance(treatment_data, list):
-            treatment_details = treatment_data[-1]  # Latest entry
-        else:
-            treatment_details = treatment_data
+            # Fetch the most recent and the one right before it
+            latest_record = treatment_data[-1]  # Most recent entry
+            previous_record = treatment_data[-2] if len(treatment_data) > 1 else {}
 
-        today = datetime.now().strftime('%Y%m%d')
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+            latest_date_key, latest_details = list(latest_record.items())[0]
+            previous_date_key, previous_details = list(previous_record.items())[0] if previous_record else ("", {})
 
-        # Fetch the latest data for today and yesterday
-        latest_date_key = max(treatment_details.keys())
-        latest_details = treatment_details[latest_date_key]
+            for field in ["Therapeutic_Area", "Target", "Indication", "App_Notification"]:
+                if field in latest_details:
+                    # Load JSON data for comparison
+                    current_field_data = json.loads(latest_details[field])  # Current (most recent) data
+                    previous_field_data = json.loads(previous_details.get(field, '[]'))  # Previous data
 
-        # Attempt to fetch the previous day's data
-        previous_details = treatment_details.get(yesterday, {})
+                    multilingual_data = MultilingualData(current_field_data[0] if current_field_data else {})
 
-        for field in ["Therapeutic_Area", "Target", "Indication", "App_Notification"]:
-            if field in latest_details:
-                current_field_data = json.loads(latest_details[field])  # Current day's data
-                logging.info(f'Todays data {current_field_data}')
-                previous_field_data = json.loads(previous_details.get(field, '[]'))  # Previous day's data
-                logging.info("English translation already exists. No translation needed.")
+                    if multilingual_data.get_translations_as_dict() != (previous_field_data[0] if previous_field_data else {}):
+                        new_translation = multilingual_data.translate_and_add(translate_text)
+                        if new_translation:  # Check if a new translation was added
+                            current_field_data.append(new_translation)  # Append new dictionary
+                            logging.info(f"New translation added for {field} in {treatment_key}")
+                    else:
+                        logging.info(f"Reusing previous translation for {field} in {treatment_key}")
 
+                    # Update with the new list
+                    latest_details[field] = json.dumps(current_field_data, ensure_ascii=False)
 
-                multilingual_data = MultilingualData(current_field_data[0] if current_field_data else {})
-
-                if multilingual_data.get_translations_as_dict() != (previous_field_data[0] if previous_field_data else {}):
-                    new_translation = multilingual_data.translate_and_add(translate_text)
-                    if new_translation:  # Check if a new translation was added
-                        current_field_data.append(new_translation)  # Append new dictionary
-                        logging.info(f"New translation added for {field} in {treatment_key}")
-                else:
-                    logging.info(f"Reusing previous translation for {field} in {treatment_key}")
-
-                latest_details[field] = json.dumps(current_field_data, ensure_ascii=False)  # Update with new list
-
-        updated_json = json.dumps(treatment_details, ensure_ascii=False)
-        update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
-        cursor.execute(update_query, (updated_json, treatment_key))
+            # Convert the entire treatment data back to JSON string
+            updated_json = json.dumps(treatment_data, ensure_ascii=False)
+            update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
+            cursor.execute(update_query, (updated_json, treatment_key))
 
     except Exception as e:
         logging.error(f"Error processing treatment with key {treatment_key}: {e}")
         raise
+
 
 def abbvie_pipeline():
     try:
@@ -1160,7 +1161,7 @@ def sanofi_pipeline():
             therapeutic_area = clean_text(therapeutic_area)
             description = clean_text(description)
 
-            identification_key = generate_identification_key("Sanofi", name, indication)
+            identification_key = generate_identification_key("Sanofi", name, indication, phase)
             date_scraped = datetime.now(timezone.utc)
 
             # Generate a unique identification key
@@ -1332,7 +1333,7 @@ def teva_pipeline():
                 identification_key = generate_identification_key("Teva Pharmaceutical Industries", name, indication)
                 date_scraped = datetime.now(timezone.utc)
 
-
+                # Apply specific data corrections
                 if "0" in indication:
                     indication = "Not Specified"
 
@@ -1350,24 +1351,36 @@ def teva_pipeline():
 
                 treatment_key = (name, indication, current_phase)
                 
-                indication_translator = MultilingualData()
-                indication_translator.add_translation("en", indication.strip())
+                try:
+                    indication_translator = MultilingualData()
+                    indication_translator.add_translation("en", indication.strip())
 
-                indication_collection = MultilingualDataCollection()
-                indication_collection.add_data(indication_translator)
+                    indication_collection = MultilingualDataCollection()
+                    indication_collection.add_data(indication_translator)
 
-                
-                if treatment_key not in processed_treatments:
-                    master_record = MasterTable(
-                        company_name="Teva Pharmaceutical Industries",
-                        treatment_name=name.strip(),
-                        indication=indication_collection.get_collection_as_json(),
-                        phase=current_phase,
-                        identification_key=identification_key,
-                        date_scraped=date_scraped
-                    )
-                    treatments.append(master_record.__dict__)  # Append the dictionary representation
-                    processed_treatments.add(treatment_key)
+                    # Convert the indication collection to JSON and check if it's valid
+                    indication_json = indication_collection.get_collection_as_json()
+                    if not indication_json or indication_json.strip() == "":
+                        raise ValueError(f"Generated empty or invalid JSON for indication: {indication}")
+
+                    if treatment_key not in processed_treatments:
+                        master_record = MasterTable(
+                            company_name="Teva Pharmaceutical Industries",
+                            treatment_name=name.strip(),
+                            indication=indication_json,
+                            phase=current_phase,
+                            identification_key=identification_key,
+                            date_scraped=date_scraped
+                        )
+                        treatments.append(master_record.__dict__)  # Append the dictionary representation
+                        processed_treatments.add(treatment_key)
+
+                except ValueError as ve:
+                    print(f"Error generating JSON for treatment: {ve}")
+                    continue
+                except Exception as e:
+                    print(f"An error occurred processing treatment: {e}")
+                    continue
 
         return treatments, html_content
     except Exception as e:
@@ -1637,8 +1650,15 @@ def parse_treatments_novartis(html):
     return treatments
 
 
-def generate_identification_key(company, treatment_name, indication):
-    return f"{company}_{treatment_name}_{indication}".replace(" ", "_")
+def generate_identification_key(company, treatment_name, indication, phase=None):
+    # Extract the number from the phase string using a regular expression
+    phase_number = ""
+    if phase:
+        match = re.search(r'\d+', phase)
+        if match:
+            phase_number = f"_{match.group(0)}"  # Just the number
+
+    return f"{company}_{treatment_name}_{indication}{phase_number}".replace(" ", "_")
 
 
 def table_insertion(treatments, html_content, company_name):
@@ -1754,11 +1774,20 @@ def clear_remake_tables():
         logging.error(f"An error occurred during database setup: {e}")
         logging.error(f"An error occurred: {e}")
 
+
+def round_down_time(dt=None, round_to=5):
+    """Round down a datetime object to the nearest 'round_to' minute increment."""
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    minutes = (dt.minute // round_to) * round_to
+    return dt.replace(minute=minutes, second=0, microsecond=0)
+
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 @app.function_name(name="HttpTrigger1")
 @app.route(route="http_trigger")
 def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    import azure.functions as func
     
     logging.info('Python HTTP trigger function processed a request.')
 
@@ -1768,8 +1797,8 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         logging.info("Finished clear_remake_tables function.")
         
         # Set the current time to test
-        current_time = datetime.now(timezone.utc)
-        logging.info(f"Current time: {current_time}")
+        current_time = round_down_time(datetime.now(timezone.utc), round_to=5)
+        logging.info(f"Rounded down time: {current_time}")
 
         # Database connection setup
         server = 'scrapedtreatmentsdatabase.database.windows.net'
@@ -1781,7 +1810,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         conn = pyodbc.connect(connection_string)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time <= ?", (current_time,))
+        cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time = ?", (current_time,))
         result = cursor.fetchone()
 
         if result:
@@ -1812,8 +1841,31 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
             logging.info("No matching objects found in the Calendar table.")
         
         logging.info("translate_trigger function called")
-        translate_trigger()
-        return json.dumps({"status": "success", "message": "All data processed and inserted successfully."})
+        translate_result = 2
+        
+        if translate_result == 2:
+            logging.info("Calling trigger_notifications function")
+            notifications_result = trigger_notifications()
+
+            if notifications_result["status"] == "success":
+                logging.info(notifications_result["message"])
+            else:
+                logging.error(notifications_result["message"])
+                return func.HttpResponse(
+                    json.dumps({"status": "error", "message": notifications_result["message"]}),
+                    status_code=500
+                )
+        else:
+            logging.error("hello")
+            return func.HttpResponse(
+                json.dumps({"status": "error", "message": "error"}),
+                status_code=500
+            )
+        
+        return func.HttpResponse(
+            json.dumps({"status": "success", "message": "All data processed and inserted successfully."}),
+            status_code=200
+        )
 
     except Exception as e:
         logging.error(f"Error processing data: {e}")
@@ -1828,8 +1880,6 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
             conn.close()
 
 
-
-
 def translate_trigger():
     server = 'scrapedtreatmentsdatabase.database.windows.net'
     database = 'scrapedtreatmentssqldatabase'
@@ -1839,7 +1889,6 @@ def translate_trigger():
 
     database_connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
 
-    # This example simply processes all entries, or you could add a condition based on another column
     query = "SELECT Treatment_Key, Treatment_Data FROM Revised_MasterTable"
 
     try:
@@ -1865,28 +1914,375 @@ def translate_trigger():
             conn.commit()
             logging.info("Translation processing completed and database updated")
 
-            try:
-                second_endpoint_url = "http://127.0.0.1:5000/trigger-notifications"
-                response = requests.get(second_endpoint_url)
-                response.raise_for_status()  # Raises an HTTPError if the response code was unsuccessful
-                logging.info("Second endpoint triggered successfully.")
-            except requests.exceptions.RequestException as e:
-                logging.error(f"Error calling the second endpoint: {e}")
-
-        return func.HttpResponse(
-            "Translation processing completed.",
-            status_code=200
-        )
+        return {"status": "success", "message": "Translation processing completed and database updated"}
 
     except pyodbc.Error as e:
         logging.error(f"Database error: {e}")
-        return func.HttpResponse(
-            f"Database error: {e}",
-            status_code=500
-        )
+        raise Exception(f"Database error: {e}")
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
-        return func.HttpResponse(
-            f"Unexpected error: {e}",
-            status_code=500
+        raise Exception(f"Unexpected error: {e}")
+
+def trigger_notifications():
+    conn = None
+    cursor = None
+    try:
+        # Initialize OpenAI API and LLM
+        openai.api_key = "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"
+        llm = ChatOpenAI(temperature=0, model="gpt-4o", openai_api_key="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")
+        
+        # Define the prompt template
+        prompt_template = PromptTemplate(
+            input_variables=["old_object", "new_object"],
+            template="""
+                Compare the following two JSON objects and provide a priority of change on a scale of 1-5 (1 being not important and 5 being extremely important).
+                Also, provide a description of the change in a concise manner. DO NOT mention the changes involved with the Date_Scraped or the App_Notification, Or Language Translations fields at all.
+
+                Based on the change, update the following template:
+
+                {{
+                    "Pipeline Info": false,
+                    "Financial Info": false,
+                    "Personell Info": false,
+                    "TherapyApproval": false,
+                    "IndicationChange": false,
+                    "EarningsReport": false,
+                    "MAndA": false,
+                    "Layoffs": false,
+                    "NewHires": false,
+                    "priority": ,  // This field should reflect the actual priority based on the change (on a scale of 1-5)
+                    "description": "",  // This field should be filled with the description of the change. Make sure to include the treatment name found in the objects.
+                }}
+
+                Old Object:
+                {old_object}
+
+                New Object:
+                {new_object}
+
+                Based on the comparison, update the fields in the JSON template to reflect the changes. Set the relevant fields to true if they are affected by the change.
+                Please return only the updated JSON template with all of the key-value pairs originally given and nothing else. So that means do not respond with any summary. Only the JSON object has to be returned.
+            """
         )
+
+        # Set up the LLM chain
+        llm_chain = prompt_template | llm
+
+        # Database connection setup
+        server = 'scrapedtreatmentsdatabase.database.windows.net'
+        database = 'scrapedtreatmentssqldatabase'
+        username = 'mzandi'
+        password = 'Ranger22!'
+        driver = '{ODBC Driver 18 for SQL Server}'
+
+        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
+        conn = pyodbc.connect(connection_string)
+        cursor = conn.cursor()
+
+        create_stream_table(conn)
+
+        # Fetch all treatment data
+        cursor.execute("SELECT Treatment_Key, Treatment_Data FROM Revised_MasterTable")
+        all_data = cursor.fetchall()
+
+        # Convert data to dictionaries for easier comparison
+        data_dict = {row[0]: json.loads(row[1]) for row in all_data}
+        logging.info(f"Fetched {data_dict} treatment records for comparison")
+
+        # Compare records and update notifications
+        for treatment_key, treatment_list in data_dict.items():
+            logging.info(f"Processing treatment with key: {treatment_key}")
+            # Assuming the last entry is the latest
+            latest_record = treatment_list[-1]
+            latest_date, latest_details = list(latest_record.items())[0]
+
+            # Compare with previous records if available
+            if len(treatment_list) > 1:
+                previous_record = treatment_list[-2]
+                previous_date, previous_details = list(previous_record.items())[0]
+
+                # Convert objects to JSON strings for the prompt
+                old_object_json = json.dumps(previous_details, indent=2)
+                new_object_json = json.dumps(latest_details, indent=2)
+
+                # Run the LLM chain with the old and new objects
+                response = llm_chain.invoke({
+                    "old_object": old_object_json,
+                    "new_object": new_object_json
+                })
+
+                # Extract the JSON content from the response
+                json_content = extract_json_from_response(response.content)
+
+                # Ensure json_content is a dictionary before processing
+                if isinstance(json_content, str):
+                    try:
+                        json_content = json.loads(json_content)
+                    except json.JSONDecodeError:
+                        logging.error(f"Failed to parse JSON content: {json_content}")
+                        continue
+
+                # Insert stream data with dictionaries
+                insert_stream_data(conn, json_content, previous_details, latest_details)
+
+                # Add the notification description to the App_Notification
+                latest_details['App_Notification'] = json.dumps([{"en": json_content}], ensure_ascii=False)
+
+            else:
+                latest_details['App_Notification'] = json.dumps([{"en": "No previous record for comparison."}], ensure_ascii=False)
+
+            # Update the treatment data with the new notification
+            updated_json = json.dumps(treatment_list, ensure_ascii=False)
+            update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
+            cursor.execute(update_query, (updated_json, treatment_key))
+
+        conn.commit()
+
+        return {"status": "success", "message": "Notifications compared and updated successfully."}
+
+    except Exception as e:
+        logging.error(f"An error occurred during comparison and update: {e}")
+        return {"status": "error", "message": str(e)}
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def create_stream_table(conn):
+    cursor = conn.cursor()
+
+    # Check if the table exists
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Stream')
+        BEGIN
+            CREATE TABLE Stream (
+                id INT PRIMARY KEY IDENTITY(1,1),
+                priority INT,
+                description NVARCHAR(255),
+                timestamp DATETIME,
+                raw_response NVARCHAR(MAX),
+                old_object NVARCHAR(MAX),
+                new_object NVARCHAR(MAX)
+            )
+        END
+    """)
+    conn.commit()
+
+    # Fetch company names from Profile_Table
+    cursor.execute("SELECT DISTINCT Company_Name FROM Profile_Table")
+    companies = [row.Company_Name for row in cursor.fetchall()]
+
+    # Fetch category names from Categories table
+    cursor.execute("SELECT DISTINCT category FROM Categories")
+    categories = [row.category for row in cursor.fetchall()]
+
+    info_types = ["Pipeline Info", "Financial Info", "Personell Info", "MAndA", "Layoffs", "NewHires", "TherapyApproval", "IndicationChange", "EarningsReport"]
+
+    # Add company columns dynamically if they don't exist
+    for company in companies:
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'{company}' AND Object_ID = Object_ID(N'Stream'))
+            BEGIN
+                ALTER TABLE Stream ADD [{company}] BIT
+            END
+        """)
+
+    # Add category columns dynamically if they don't exist
+    for category in categories:
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'{category}' AND Object_ID = Object_ID(N'Stream'))
+            BEGIN
+                ALTER TABLE Stream ADD [{category}] BIT
+            END
+        """)
+
+    # Add info type columns dynamically if they don't exist
+    for info_type in info_types:
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE Name = N'{info_type}' AND Object_ID = Object_ID(N'Stream'))
+            BEGIN
+                ALTER TABLE Stream ADD [{info_type}] BIT
+            END
+        """)
+
+    conn.commit()
+    cursor.close()
+
+def extract_json_from_response(response):
+    try:
+        # Use regex to find the content between the first '{' and the last '}'
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            # Now try to parse the extracted string as JSON
+            json_data = json.loads(json_str)
+            logging.info(json_data)
+            logging.info("----------")
+            return json_data
+        else:
+            raise ValueError("No JSON object found in the response.")
+    except (ValueError, json.JSONDecodeError) as e:
+        # Handle cases where JSON parsing fails
+        logging.error(f"Error extracting JSON: {e}")
+        return None
+
+def insert_stream_data(conn, response, old_object, new_object):
+    cursor = conn.cursor()
+
+    try:
+        # Ensure response is a dictionary before processing
+        if isinstance(response, dict):
+            data = response
+        else:
+            try:
+                # Attempt to parse the response as JSON
+                data = json.loads(response)
+            except json.JSONDecodeError:
+                logging.error(f"Failed to parse JSON response: {response}")
+                # If JSON parsing fails, handle it accordingly (e.g., store raw response)
+                insert_query = "INSERT INTO Stream (raw_response, old_object, new_object) VALUES (?, ?, ?)"
+                cursor.execute(insert_query, (response, json.dumps(old_object), json.dumps(new_object)))
+                conn.commit()
+                return
+
+        # Handle default values
+        priority = data.get("priority", 1)  # Default to 1 if priority is missing
+        description = data.get("description", "No changes detected")  # Default to "No changes detected" if description is missing
+        timestamp = data.get("timestamp", None)
+
+        # Fetch company names from Profile_Table
+        cursor.execute("SELECT DISTINCT Company_Name FROM Profile_Table")
+        companies = [row.Company_Name for row in cursor.fetchall()]
+
+        # Fetch category names from Categories table
+        cursor.execute("SELECT DISTINCT category FROM Categories")
+        categories = [row.category for row in cursor.fetchall()]
+
+        # Define the info types
+        info_types = ["Pipeline Info", "Financial Info", "Personell Info", "MAndA", "Layoffs", "NewHires", "TherapyApproval", "IndicationChange", "EarningsReport"]
+
+        # Combine all into one list
+        companies_categories_info_types = companies + categories + info_types
+
+        # Prepare a dictionary to hold company, category, and info type values
+        columns_and_values = {}
+
+        for field in companies_categories_info_types:
+            # Ensure the field name is correctly formatted for SQL
+            field_formatted = f"[{field}]"
+            columns_and_values[field_formatted] = data.get(field, False)  # Default to False if not found
+
+        # Extract the Company_Name from the old_object and new_object
+        old_company_name = old_object.get("Company_Name", "")
+        new_company_name = new_object.get("Company_Name", "")
+
+        # Update Stream table if Company_Name exists as a column
+        for company_name in [old_company_name, new_company_name]:
+            if company_name and company_name in companies:
+                columns_and_values[f"[{company_name}]"] = True  # Set the corresponding column to True
+
+        # Add old_object and new_object to the columns and values
+        columns_and_values["old_object"] = json.dumps(old_object)  # Convert old_object to JSON string
+        columns_and_values["new_object"] = json.dumps(new_object)  # Convert new_object to JSON string
+
+        # Construct the SQL insert query
+        columns = ', '.join(columns_and_values.keys()) + ', priority, description, timestamp'
+        placeholders = ', '.join(['?' for _ in columns_and_values]) + ', ?, ?, ?'
+        values = list(columns_and_values.values()) + [priority, description, timestamp]
+
+        insert_query = f"INSERT INTO Stream ({columns}) VALUES ({placeholders})"
+        
+        # Execute the SQL query with the extracted values
+        cursor.execute(insert_query, values)
+        conn.commit()
+
+        matched_clients = match_clients_with_notification(conn, data)
+
+        if len(matched_clients) == 0:
+            send_sms("9144334333", description)
+        else:
+            for client in matched_clients:
+                logging.info(f"Sending notification to client: {client}")
+                # Example fields for notification preferences
+                if client.get("Email"):
+                    send_email(client["Email"], "New Notification", description)
+                if client.get("text"):
+                    send_sms(client["text"], description)
+                if client.get("Call"):
+                    send_call(client["Phone"], description)
+
+    except json.JSONDecodeError:
+        # If JSON parsing fails, store the raw response and the objects
+        logging.error(f"JSON parsing failed for response: {response}")
+        insert_query = "INSERT INTO Stream (raw_response, old_object, new_object) VALUES (?, ?, ?)"
+        cursor.execute(insert_query, (response, json.dumps(old_object), json.dumps(new_object)))
+        conn.commit()
+
+    finally:
+        cursor.close()
+
+
+def match_clients_with_notification(conn, response):
+    cursor = conn.cursor()
+
+    # Modify cursor to return dictionaries
+    cursor.execute("SELECT * FROM Notification_Request_Object_Table")
+    columns = [desc[0] for desc in cursor.description]
+
+    # Fetch all clients and their preferences
+    clients = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    # List to store clients who should receive the notification
+    matched_clients = []
+
+    # Extract relevant fields from the response
+    response_companies = [company for company in columns if response.get(company, False)]
+    response_info_types = [info_type for info_type in ["MAndA", "Layoffs", "NewHires", "TherapyApproval", "IndicationChange", "EarningsReport"] if response.get(info_type, False)]
+    response_priority = response.get("priority", 1)
+
+    # Iterate through each client
+    for client in clients:
+        client_priority = client.get('priority', 1)
+        match_found = False
+
+        # Check if client has matching preferences for companies and info types
+        if any(client.get(company) for company in response_companies):
+            # Check if the priority level matches or is greater
+            if response_priority >= client_priority:
+                match_found = True
+
+        # If a match is found, add the client to the list
+        if match_found:
+            matched_clients.append(client)
+
+    cursor.close()
+    return matched_clients
+
+def send_email(email_address, subject, message):
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login("your_email@gmail.com", "your_password")
+            server.sendmail("your_email@gmail.com", email_address, f"Subject: {subject}\n\n{message}")
+        print(f"Email sent to {email_address}")
+    except Exception as e:
+        print(f"Failed to send email to {email_address}: {e}")
+
+def send_sms(phone_number, message):
+    try:
+        client = Client("ACe972b1c490584f6636c1421231661770", "8951a5aefa3eeaba361a5deaf0eb8fbf")
+        client.messages.create(body=message, from_="+15512136764", to=phone_number)
+        print(f"SMS sent to {phone_number}")
+    except Exception as e:
+        print(f"Failed to send SMS to {phone_number}: {e}")
+
+def send_call(phone_number, message):
+    try:
+        client = Client("account_sid", "auth_token")
+        call = client.calls.create(twiml=f'<Response><Say>{message}</Say></Response>', to=phone_number, from_="+123456789")
+        print(f"Call made to {phone_number}")
+    except Exception as e:
+        print(f"Failed to make call to {phone_number}: {e}")

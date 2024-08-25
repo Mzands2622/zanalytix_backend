@@ -335,7 +335,7 @@ def match_clients_with_notification(conn, response):
         match_found = False
 
         # Check if client has matching preferences for companies and info types
-        if any(client.get(company) for company in response_companies) and any(client.get(info_type) for info_type in response_info_types):
+        if any(client.get(company) for company in response_companies):
             # Check if the priority level matches or is greater
             if response_priority >= client_priority:
                 match_found = True

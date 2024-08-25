@@ -4,3 +4,7 @@ soupsieve==2.5
 requests
 pyodbc
 translate
+langchain
+langchain-openai
+openai
+twilio
