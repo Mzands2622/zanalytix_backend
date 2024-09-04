@@ -129,42 +129,55 @@ def call_translation_api(text, source_lang, target_lang):
 
 def process_and_translate_row(treatment_data, cursor, treatment_key):
     try:
-        # Ensure treatment_data is a list
-        if isinstance(treatment_data, list):
-            # Fetch the most recent and the one right before it
-            latest_record = treatment_data[-1]  # Most recent entry
-            previous_record = treatment_data[-2] if len(treatment_data) > 1 else {}
+        # Ensure treatment_data is a list and contains dictionaries
+        if not isinstance(treatment_data, list) or not all(isinstance(item, dict) for item in treatment_data):
+            logging.error(f"Unexpected structure for treatment_data: {treatment_data}")
+            return
 
-            latest_date_key, latest_details = list(latest_record.items())[0]
-            previous_date_key, previous_details = list(previous_record.items())[0] if previous_record else ("", {})
+        # Fetch the most recent and the one right before it
+        latest_record = treatment_data[-1]  # Most recent entry
+        previous_record = treatment_data[-2] if len(treatment_data) > 1 else {}
 
-            for field in ["Therapeutic_Area", "Target", "Indication", "App_Notification"]:
-                if field in latest_details:
+        latest_date_key, latest_details = list(latest_record.items())[0]
+        previous_date_key, previous_details = list(previous_record.items())[0] if previous_record else ("", {})
+
+        for field in ["Therapeutic_Area", "Target", "Indication", "App_Notification"]:
+            if field in latest_details:
+                try:
                     # Load JSON data for comparison
-                    current_field_data = json.loads(latest_details[field])  # Current (most recent) data
-                    previous_field_data = json.loads(previous_details.get(field, '[]'))  # Previous data
+                    current_field_data = json.loads(latest_details[field]) if latest_details[field] else []
+                    previous_field_data = json.loads(previous_details.get(field, '[]')) if field in previous_details else []
+                except json.JSONDecodeError:
+                    logging.error(f"Invalid JSON data in field '{field}' for treatment {treatment_key}")
+                    continue  # Skip processing this field
 
-                    multilingual_data = MultilingualData(current_field_data[0] if current_field_data else {})
+                multilingual_data = MultilingualData(current_field_data[0] if current_field_data else {})
 
-                    if multilingual_data.get_translations_as_dict() != (previous_field_data[0] if previous_field_data else {}):
-                        new_translation = multilingual_data.translate_and_add(translate_text)
-                        if new_translation:  # Check if a new translation was added
-                            current_field_data.append(new_translation)  # Append new dictionary
-                            logging.info(f"New translation added for {field} in {treatment_key}")
-                    else:
-                        logging.info(f"Reusing previous translation for {field} in {treatment_key}")
+                # Check if the current data is different from the previous one
+                if multilingual_data.get_translations_as_dict() != (previous_field_data[0] if previous_field_data else {}):
+                    new_translation = multilingual_data.translate_and_add(translate_text)
+                    if new_translation:  # Check if a new translation was added
+                        current_field_data.append(new_translation)  # Append new dictionary
+                        logging.info(f"New translation added for {field} in {treatment_key}")
+                else:
+                    logging.info(f"Reusing previous translation for {field} in {treatment_key}")
+                    # Reuse the previous translation, avoiding duplicates
+                    if previous_field_data and previous_field_data[0] not in current_field_data:
+                        current_field_data.append(previous_field_data[0])
 
-                    # Update with the new list
-                    latest_details[field] = json.dumps(current_field_data, ensure_ascii=False)
+                # Update with the new list
+                latest_details[field] = json.dumps(current_field_data, ensure_ascii=False)
 
-            # Convert the entire treatment data back to JSON string
-            updated_json = json.dumps(treatment_data, ensure_ascii=False)
-            update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
-            cursor.execute(update_query, (updated_json, treatment_key))
+        # Convert the entire treatment data back to JSON string
+        updated_json = json.dumps(treatment_data, ensure_ascii=False)
+        update_query = "UPDATE Revised_MasterTable SET Treatment_Data = ? WHERE Treatment_Key = ?"
+        cursor.execute(update_query, (updated_json, treatment_key))
 
     except Exception as e:
         logging.error(f"Error processing treatment with key {treatment_key}: {e}")
         raise
+
+
 
 
 def abbvie_pipeline():
@@ -272,18 +285,22 @@ def bayer_pipeline():
                 area_translator = MultilingualData()
                 program_mode_of_action_translator = MultilingualData()
                 indication_translator = MultilingualData()
+                target_translator = MultilingualData()
 
                 area_translator.add_translation("en", area)
                 program_mode_of_action_translator.add_translation("en", program_mode_of_action)
                 indication_translator.add_translation("en", indication)
+                target_translator.add_translation("en", "Null")
 
                 area_collection = MultilingualDataCollection()
                 program_mode_of_action_collection = MultilingualDataCollection()
                 indication_collection = MultilingualDataCollection()
+                target_collection = MultilingualDataCollection()
 
                 area_collection.add_data(area_translator)
                 program_mode_of_action_collection.add_data(program_mode_of_action_translator)
                 indication_collection.add_data(indication_translator)
+                target_collection.add_data(target_translator)
 
 
                 if treatment_key not in processed_treatments:
@@ -292,6 +309,7 @@ def bayer_pipeline():
                         therapeutic_area=area_collection.get_collection_as_json(),
                         treatment_name=program_mode_of_action_collection.get_collection_as_json(),
                         indication=indication_collection.get_collection_as_json(),
+                        target=target_collection.get_collection_as_json(),
                         phase=phase,
                         date_scraped=datetime.now(timezone.utc),
                         identification_key=identification_key  # Set the generated key
@@ -462,18 +480,22 @@ def bms_pipeline():
             therapeutic_area_translator = MultilingualData()
             research_area_line_of_therapy_translator = MultilingualData()
             disease_area_translator = MultilingualData()
+            target_translator = MultilingualData()
 
             therapeutic_area_translator.add_translation("en", therapeutic_area)
             research_area_line_of_therapy_translator.add_translation("en", research_area_line_of_therapy)
             disease_area_translator.add_translation("en", disease_area)
+            target_translator.add_translation("en", "Null")
 
             therapeutic_area_collection = MultilingualDataCollection()
             research_area_line_of_therapy_collection = MultilingualDataCollection()
             disease_area_collection = MultilingualDataCollection()
+            target_collection = MultilingualDataCollection()
 
             therapeutic_area_collection.add_data(therapeutic_area_translator)
             research_area_line_of_therapy_collection.add_data(research_area_line_of_therapy_translator)
             disease_area_collection.add_data(disease_area_translator)
+            target_collection.add_data(target_translator)
 
             if treatment_key not in processed_treatments:
                 date_scraped = datetime.now(timezone.utc)
@@ -482,6 +504,7 @@ def bms_pipeline():
                     therapeutic_area=therapeutic_area_collection.get_collection_as_json(),
                     treatment_name=brand_name_compound,
                     indication=research_area_line_of_therapy_collection.get_collection_as_json(),
+                    target=target_collection.get_collection_as_json(),
                     phase=phase,
                     date_scraped=date_scraped,
                     date_last_changed=date_last_changed,
@@ -560,18 +583,22 @@ def gilead_pipeline():
                 therapeutic_area_translator = MultilingualData()
                 indication_translator = MultilingualData()
                 notes_translator = MultilingualData()
+                target_translator = MultilingualData()
 
                 therapeutic_area_translator.add_translation("en", therapeutic_area)
                 indication_translator.add_translation("en", indication)
                 notes_translator.add_translation("en", notes)
+                target_translator.add_translation("en", "Null")
 
                 therapeutic_area_collection = MultilingualDataCollection()
                 indication_collection = MultilingualDataCollection()
                 notes_collection = MultilingualDataCollection()
+                target_collection = MultilingualDataCollection()
 
                 therapeutic_area_collection.add_data(therapeutic_area_translator)
                 indication_collection.add_data(indication_translator)
                 notes_collection.add_data(notes_translator)
+                target_collection.add_data(target_translator)
 
                 if treatment_key not in processed_treatments:
                     master_record = MasterTable(
@@ -581,6 +608,7 @@ def gilead_pipeline():
                         indication=indication_collection.get_collection_as_json(),
                         phase=phase,
                         notes=notes_collection.get_collection_as_json(),
+                        target=target_collection.get_collection_as_json(),
                         date_scraped=date_scraped,
                         identification_key=identification_key,
                         date_last_changed=date_last_changed
@@ -710,15 +738,23 @@ def johnson_johnson_pipeline():
 
                 therapauetic_area_translator = MultilingualData()
                 indication_translator = MultilingualData()
+                target_translator = MultilingualData()
 
                 therapauetic_area_translator.add_translation("en", area_name)
                 indication_translator.add_translation("en", indication)
+                target_translator.add_translation("en", "Null")
+
 
                 therapauetic_area_collection = MultilingualDataCollection()
                 indication_collection = MultilingualDataCollection()
+                target_collection = MultilingualDataCollection()
+
 
                 therapauetic_area_collection.add_data(therapauetic_area_translator)
                 indication_collection.add_data(indication_translator)
+                target_collection.add_data(target_translator)
+
+
 
                 if treatment_key not in processed_treatments:
                     master_record = MasterTable(
@@ -726,6 +762,7 @@ def johnson_johnson_pipeline():
                         therapeutic_area=therapauetic_area_collection.get_collection_as_json(),
                         treatment_name=treatment_name,
                         indication=indication_collection.get_collection_as_json(),
+                        target=target_collection.get_collection_as_json(),
                         phase=phase,
                         date_scraped=date_scraped,
                         identification_key=identification_key
@@ -791,7 +828,7 @@ def merck_pipeline():
                     modality = clean_text(modality)
 
                     # Generate a unique identification key for each treatment
-                    identification_key = generate_identification_key("Merck", molecule_name, indication_final)
+                    identification_key = generate_identification_key("Merck", molecule_name, indication_final, phase_text)
                     date_scraped = datetime.now(timezone.utc)
 
                     # Generate a unique identification key
@@ -1297,7 +1334,7 @@ def teva_pipeline():
             h2_tag = slide.find_previous("h2")
             if h2_tag:
                 current_phase = h2_tag.text.strip()
-            
+
             current_phase = clean_phase(current_phase)
 
             content_div = slide.select_one('.vi-pipeline-card__main')
@@ -1350,7 +1387,7 @@ def teva_pipeline():
                     indication = "Multiple System Atrophy"
 
                 treatment_key = (name, indication, current_phase)
-                
+
                 try:
                     indication_translator = MultilingualData()
                     indication_translator.add_translation("en", indication.strip())
@@ -1358,9 +1395,29 @@ def teva_pipeline():
                     indication_collection = MultilingualDataCollection()
                     indication_collection.add_data(indication_translator)
 
+                    therapeutic_area_translator = MultilingualData()
+                    therapeutic_area_translator.add_translation("en", 'Null')
+
+                    therapeutic_area_collection = MultilingualDataCollection()
+                    therapeutic_area_collection.add_data(therapeutic_area_translator)
+
+                    target_translator = MultilingualData()
+                    target_translator.add_translation("en", 'Null')
+
+                    target_collection = MultilingualDataCollection()
+                    target_collection.add_data(target_translator)
+
                     # Convert the indication collection to JSON and check if it's valid
                     indication_json = indication_collection.get_collection_as_json()
                     if not indication_json or indication_json.strip() == "":
+                        raise ValueError(f"Generated empty or invalid JSON for indication: {indication}")
+
+                    therapeutic_area_json = therapeutic_area_collection.get_collection_as_json()
+                    if not therapeutic_area_json or therapeutic_area_json.strip() == "":
+                        raise ValueError(f"Generated empty or invalid JSON for indication: {indication}")
+
+                    target_json = target_collection.get_collection_as_json()
+                    if not target_json or target_json.strip() == "":
                         raise ValueError(f"Generated empty or invalid JSON for indication: {indication}")
 
                     if treatment_key not in processed_treatments:
@@ -1368,6 +1425,8 @@ def teva_pipeline():
                             company_name="Teva Pharmaceutical Industries",
                             treatment_name=name.strip(),
                             indication=indication_json,
+                            therapeutic_area=therapeutic_area_json,
+                            target=target_json,
                             phase=current_phase,
                             identification_key=identification_key,
                             date_scraped=date_scraped
@@ -1386,7 +1445,7 @@ def teva_pipeline():
     except Exception as e:
         print("An error occurred scraping Teva Pharmaceutical's pipeline", e)
         return []
-
+    
 def astrazeneca_pipeline():
     try:
         web = "https://www.astrazeneca.com/our-therapy-areas/pipeline.html"
@@ -1784,22 +1843,18 @@ def round_down_time(dt=None, round_to=5):
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
-@app.function_name(name="HttpTrigger1")
-@app.route(route="http_trigger")
-def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
-    import azure.functions as func
+@app.function_name(name="ScrapeAndProcessTrigger")
+@app.route(route="scrape_and_process_trigger")
+def scrape_and_process_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    import azure.functions as func_two
     
-    logging.info('Python HTTP trigger function processed a request.')
+    logging.info('Python HTTP trigger function for scraping and processing started.')
 
     try:
         logging.info("Starting clear_remake_tables function.")
         clear_remake_tables()
         logging.info("Finished clear_remake_tables function.")
         
-        # Set the current time to test
-        current_time = round_down_time(datetime.now(timezone.utc), round_to=5)
-        logging.info(f"Rounded down time: {current_time}")
-
         # Database connection setup
         server = 'scrapedtreatmentsdatabase.database.windows.net'
         database = 'scrapedtreatmentssqldatabase'
@@ -1810,8 +1865,26 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         conn = pyodbc.connect(connection_string)
         cursor = conn.cursor()
 
+        # Set the current time to test
+        current_time = round_down_time(datetime.now(timezone.utc), round_to=5)
+        logging.info(f"Rounded down time: {current_time}")
+
+        # Try to acquire the lock and proceed only if the row hasn't been processed
+        cursor.execute("""
+            UPDATE Calendar 
+            SET [Check] = 1 
+            WHERE Time = ? AND [Check] = 0
+        """, (current_time,))
+        
+        if cursor.rowcount == 0:
+            logging.info("This time slot has already been processed or is currently being processed.")
+            return func_two.HttpResponse("Time slot already processed or in progress", status_code=202)
+
+        # If we got here, we've acquired the lock. Proceed with scraping.
         cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time = ?", (current_time,))
         result = cursor.fetchone()
+
+        processed_any = False  # Flag to check if any scraping object was processed
 
         if result:
             scraping_objects = json.loads(result[0])
@@ -1822,54 +1895,59 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info(f"Object Code: {object_code}")
                 
                 # Attempt to find the function by name
-                func = globals().get(object_code)
+                func_three = globals().get(object_code)
                 
-                if func:
-                    logging.info(f"Executing function for {object_code}")
-                    # Call the scraping function
-                    data, content = func()  # Assuming each scraping function returns a tuple (data, content)
-                    
-                    # Extract the first word from objectDescription for the table name
-                    table_name = obj['objectDescription'].split()[0]
-                    
-                    # Call the table insertion function
-                    logging.info(f'Inserting data for {table_name}...')
-                    table_insertion(data, content, table_name)
+                if func_three:
+                    try:
+                        logging.info(f"Executing function for {object_code}")
+                        # Call the scraping function
+                        data, content = func_three()  # Assuming each scraping function returns a tuple (data, content)
+                        
+                        # Extract the first word from objectDescription for the table name
+                        table_name = obj['objectDescription'].split()[0]
+                        
+                        # Call the table insertion function
+                        logging.info(f'Inserting data for {table_name}...')
+                        table_insertion(data, content, table_name)
+                        processed_any = True  # Set flag to True if processing was successful
+                    except Exception as e:
+                        logging.error(f"Error processing {object_code}: {e}")
+                        continue  # Continue to the next function even if there is an error
                 else:
                     logging.error(f"No function matched for {object_code}")
         else:
             logging.info("No matching objects found in the Calendar table.")
         
-        logging.info("translate_trigger function called")
-        translate_result = 2
-        
-        if translate_result == 2:
-            logging.info("Calling trigger_notifications function")
-            notifications_result = trigger_notifications()
+        # If any processing was successful, set the status to True
+        if processed_any:
+            cursor.execute("UPDATE ProcessingStatus SET status = 1")
 
-            if notifications_result["status"] == "success":
-                logging.info(notifications_result["message"])
-            else:
-                logging.error(notifications_result["message"])
-                return func.HttpResponse(
-                    json.dumps({"status": "error", "message": notifications_result["message"]}),
-                    status_code=500
-                )
-        else:
-            logging.error("hello")
-            return func.HttpResponse(
-                json.dumps({"status": "error", "message": "error"}),
-                status_code=500
+        # Do not reset the Check flag after processing
+        # The [Check] = 1 state will persist, indicating this time slot has been processed
+        conn.commit()
+
+        # Attempt to return a successful response
+        try:
+            return func_two.HttpResponse(
+                json.dumps({
+                    "status": "success" if processed_any else "no_data", 
+                    "message": "Data processed successfully." if processed_any else "No data processed."
+                }),
+                status_code=200
             )
-        
-        return func.HttpResponse(
-            json.dumps({"status": "success", "message": "All data processed and inserted successfully."}),
-            status_code=200
-        )
+        except AttributeError as e:
+            logging.error(f"AttributeError encountered: {e}")
+            return func_two.HttpResponse(
+                json.dumps({
+                    "status": "success_with_error",
+                    "message": "Data processed, but an AttributeError occurred."
+                }),
+                status_code=200
+            )
 
     except Exception as e:
         logging.error(f"Error processing data: {e}")
-        return func.HttpResponse(
+        return func_two.HttpResponse(
             f"Error processing data: {e}",
             status_code=500
         )
@@ -1879,6 +1957,109 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         if conn:
             conn.close()
 
+
+
+@app.function_name(name="TranslateAndNotifyTrigger")
+@app.route(route="translate_and_notify_trigger")
+def translate_and_notify_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    import azure.functions as func_four
+    
+    logging.info('Python HTTP trigger function for translation and notifications started.')
+
+    try:
+        # Database connection setup
+        server = 'scrapedtreatmentsdatabase.database.windows.net'
+        database = 'scrapedtreatmentssqldatabase'
+        username = 'mzandi'
+        password = 'Ranger22!'
+        driver = '{ODBC Driver 18 for SQL Server}'
+        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
+        conn = pyodbc.connect(connection_string)
+        cursor = conn.cursor()
+
+        # Set the current time to the nearest hour
+        current_time = round_down_time(datetime.now(timezone.utc), round_to=60)
+        logging.info(f"Rounded down time: {current_time}")
+
+        # Check if the row in the Calendar has Check = 1 and ProcessingStatus = 1
+        cursor.execute("SELECT [Check] FROM Calendar WHERE Time = ?", (current_time,))
+        calendar_check = cursor.fetchone()
+
+        cursor.execute("SELECT status FROM ProcessingStatus")
+        processing_status = cursor.fetchone()
+
+        if calendar_check and calendar_check[0] == 1 and processing_status and processing_status[0] == 1:
+            logging.info("Data was processed. Proceeding with translation and notifications.")
+
+            # Update Calendar to indicate that translation/notification is in progress (Set Check = 2)
+            cursor.execute("UPDATE Calendar SET [Check] = 2 WHERE Time = ?", (current_time,))
+            cursor.execute("UPDATE ProcessingStatus SET status = 2")  # Optional: you can use a different status to indicate in-progress
+            conn.commit()
+
+            try:
+                # Call translation function
+                logging.info("Calling translate_trigger function")
+                translate_result = translate_trigger()
+                if translate_result["status"] == "success":
+                    logging.info(translate_result["message"])
+                else:
+                    logging.error(translate_result["message"])
+
+                # Call notification function
+                logging.info("Calling trigger_notifications function")
+                notifications_result = trigger_notifications()
+                if notifications_result["status"] == "success":
+                    logging.info(notifications_result["message"])
+                else:
+                    logging.error(notifications_result["message"])
+                    return func_four.HttpResponse(
+                        json.dumps({"status": "error", "message": notifications_result["message"]}),
+                        status_code=500
+                    )
+
+                # Update Calendar to indicate that translation/notification is done (Set Check = 3)
+                cursor.execute("UPDATE Calendar SET [Check] = 3 WHERE Time = ?", (current_time,))
+                cursor.execute("UPDATE ProcessingStatus SET status = 0")
+                conn.commit()
+
+                return func_four.HttpResponse(
+                    json.dumps({
+                        "status": "success", 
+                        "message": "Data translated and notifications triggered successfully."
+                    }),
+                    status_code=200
+                )
+
+            except Exception as e:
+                logging.error(f"Error in translate_trigger or trigger_notifications: {e}")
+                # If an error occurs, revert the Check status back to 1 so it can be retried later
+                cursor.execute("UPDATE Calendar SET [Check] = 1 WHERE Time = ?", (current_time,))
+                cursor.execute("UPDATE ProcessingStatus SET status = 1")
+                conn.commit()
+                return func_four.HttpResponse(
+                    f"Error in translate_trigger or trigger_notifications: {e}",
+                    status_code=500
+                )
+        else:
+            logging.info("No data was processed or translation already occurred. Skipping translation and notifications.")
+            return func_four.HttpResponse(
+                json.dumps({
+                    "status": "no_data",
+                    "message": "No data was processed or translation already occurred. Translation and notifications skipped."
+                }),
+                status_code=200
+            )
+    except Exception as e:
+        logging.error(f"Error in translate_and_notify_trigger: {e}")
+        return func_four.HttpResponse(
+            f"Error in translate_and_notify_trigger: {e}",
+            status_code=500
+        )
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 def translate_trigger():
     server = 'scrapedtreatmentsdatabase.database.windows.net'
@@ -2142,7 +2323,7 @@ def insert_stream_data(conn, response, old_object, new_object):
                 data = json.loads(response)
             except json.JSONDecodeError:
                 logging.error(f"Failed to parse JSON response: {response}")
-                # If JSON parsing fails, handle it accordingly (e.g., store raw response)
+                # If JSON parsing fails, store raw response and return early
                 insert_query = "INSERT INTO Stream (raw_response, old_object, new_object) VALUES (?, ?, ?)"
                 cursor.execute(insert_query, (response, json.dumps(old_object), json.dumps(new_object)))
                 conn.commit()
@@ -2151,7 +2332,10 @@ def insert_stream_data(conn, response, old_object, new_object):
         # Handle default values
         priority = data.get("priority", 1)  # Default to 1 if priority is missing
         description = data.get("description", "No changes detected")  # Default to "No changes detected" if description is missing
-        timestamp = data.get("timestamp", None)
+        timestamp = data.get("timestamp", datetime.utcnow())  # Use current UTC time if timestamp is not provided
+
+        # Prepare raw_response value to store the original response
+        raw_response = response if isinstance(response, str) else json.dumps(response)
 
         # Fetch company names from Profile_Table
         cursor.execute("SELECT DISTINCT Company_Name FROM Profile_Table")
@@ -2184,14 +2368,16 @@ def insert_stream_data(conn, response, old_object, new_object):
             if company_name and company_name in companies:
                 columns_and_values[f"[{company_name}]"] = True  # Set the corresponding column to True
 
-        # Add old_object and new_object to the columns and values
+        # Add old_object, new_object, raw_response, and timestamp to the columns and values
         columns_and_values["old_object"] = json.dumps(old_object)  # Convert old_object to JSON string
         columns_and_values["new_object"] = json.dumps(new_object)  # Convert new_object to JSON string
+        columns_and_values["raw_response"] = raw_response  # Store the raw response
+        columns_and_values["timestamp"] = timestamp  # Use the determined timestamp
 
         # Construct the SQL insert query
-        columns = ', '.join(columns_and_values.keys()) + ', priority, description, timestamp'
-        placeholders = ', '.join(['?' for _ in columns_and_values]) + ', ?, ?, ?'
-        values = list(columns_and_values.values()) + [priority, description, timestamp]
+        columns = ', '.join(columns_and_values.keys()) + ', priority, description'
+        placeholders = ', '.join(['?' for _ in columns_and_values]) + ', ?, ?'
+        values = list(columns_and_values.values()) + [priority, description]
 
         insert_query = f"INSERT INTO Stream ({columns}) VALUES ({placeholders})"
         
@@ -2201,18 +2387,19 @@ def insert_stream_data(conn, response, old_object, new_object):
 
         matched_clients = match_clients_with_notification(conn, data)
 
-        if len(matched_clients) == 0:
-            send_sms("9144334333", description)
-        else:
-            for client in matched_clients:
-                logging.info(f"Sending notification to client: {client}")
-                # Example fields for notification preferences
-                if client.get("Email"):
-                    send_email(client["Email"], "New Notification", description)
-                if client.get("text"):
-                    send_sms(client["text"], description)
-                if client.get("Call"):
-                    send_call(client["Phone"], description)
+        description_title = f'{new_company_name} Notification: '
+        description_title += description
+        final_description = description_title
+
+        for client in matched_clients:
+            logging.info(f"Sending notification to client: {client}")
+            # Example fields for notification preferences
+            if client.get("Email"):
+                send_email(client["Email"], "New Notification", description)
+            if client.get("text"):
+                send_sms(client["text"], description)
+            if client.get("Call"):
+                send_call(client["Phone"], description)
 
     except json.JSONDecodeError:
         # If JSON parsing fails, store the raw response and the objects
@@ -2223,6 +2410,7 @@ def insert_stream_data(conn, response, old_object, new_object):
 
     finally:
         cursor.close()
+
 
 
 def match_clients_with_notification(conn, response):
@@ -2251,7 +2439,7 @@ def match_clients_with_notification(conn, response):
         # Check if client has matching preferences for companies and info types
         if any(client.get(company) for company in response_companies):
             # Check if the priority level matches or is greater
-            if response_priority >= client_priority:
+            if response_priority > client_priority:
                 match_found = True
 
         # If a match is found, add the client to the list

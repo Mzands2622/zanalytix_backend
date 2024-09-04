@@ -97,7 +97,7 @@ def save_or_update_notification_preferences():
             # Generate SetTitle based on the current count + index
             set_title = preference_set.get('SetTitle', "")
             notification_priority = preference_set.get('Priority', 3)
-            if notification_priority == True:
+            if notification_priority == 'true':
                 notification_priority = 1
             first_name = preference_set.get('FirstName', '')
             last_name = preference_set.get('LastName', '')
@@ -302,4 +302,38 @@ def delete_notification_preference(set_id):
         return jsonify({"message": "Preference set deleted successfully"}), 200
     except Exception as e:
         print(f"Error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@preferences_bp.route('/update-preference-set-title/<int:set_id>', methods=['PATCH'])
+def update_preference_set_title(set_id):
+    try:
+        data = request.json
+        new_title = data.get('SetTitle')
+        
+        if not new_title:
+            return jsonify({"error": "New title is required"}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        update_query = """
+        UPDATE Notification_Request_Object_Table
+        SET SetTitle = ?
+        WHERE SetID = ?
+        """
+        
+        cursor.execute(update_query, (new_title, set_id))
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "Preference set not found"}), 404
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"message": "Title updated successfully", "SetID": set_id, "NewTitle": new_title}), 200
+    except Exception as e:
+        print(f"Error updating title: {str(e)}")
         return jsonify({"error": str(e)}), 500

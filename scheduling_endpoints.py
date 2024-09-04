@@ -612,3 +612,58 @@ def save_programmer_contacts(userId):
         # Ensure the connection is closed
         if conn:
             conn.close()
+
+
+@scheduling_options_bp.route('/update-company-details', methods=['POST'])
+def update_company_details():
+    conn = None
+    cursor = None
+    try:
+        data = request.json
+        print("Received data:", data)  # Log the received data
+        if not data:
+            return jsonify({'status': 'error', 'message': 'No data received'}), 400
+
+        # Validate necessary keys in the JSON payload
+        required_keys = ['companyId', 'companyLogo', 'pipelineLink', 'categories']
+        missing_keys = [key for key in required_keys if key not in data]
+        if missing_keys:
+            return jsonify({'status': 'error', 'message': f'Missing data for keys: {missing_keys}'}), 400
+
+        # Database connection setup
+        server = 'scrapedtreatmentsdatabase.database.windows.net'
+        database = 'scrapedtreatmentssqldatabase'
+        username = 'mzandi'
+        password = 'Ranger22!'
+        driver = '{ODBC Driver 17 for SQL Server}'
+        connection_string = f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}'
+        conn = pyodbc.connect(connection_string)
+        cursor = conn.cursor()
+
+        # Prepare the categories JSON
+        categories_json = json.dumps(data['categories'])
+
+        # Update the company details
+        cursor.execute("""
+            UPDATE Profile_Table
+            SET 
+                Company_Logo = ?, 
+                Pipeline_Link = ?, 
+                Categories = ?
+            WHERE Company_ID = ?""", 
+            (data['companyLogo'], data['pipelineLink'], categories_json, data['companyId']))
+
+        conn.commit()
+        return jsonify({'status': 'success', 'message': 'Company details updated successfully'}), 200
+
+    except pyodbc.Error as e:
+        print("Database error:", str(e))
+        return jsonify({'status': 'error', 'message': 'Database error: ' + str(e)}), 500
+    except Exception as e:
+        print("Error during processing:", str(e))
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()

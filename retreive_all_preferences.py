@@ -84,6 +84,8 @@ def get_user_preferences(user_id):
             "preferenceSets": preference_sets
         }
 
+        print(full_preferences)
+
         return jsonify(full_preferences), 200
 
     except Exception as e:

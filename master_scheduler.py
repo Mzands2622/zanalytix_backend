@@ -12,6 +12,8 @@ from sign_up import signup_bp  # Import the auth blueprint
 from login import login_bp  # Import the auth blueprint
 from retreive_all_preferences import retreive_options_bp  # Import the blueprint
 from admin_endpoints import admin_console_bp  # Import the blueprint
+from treatment_visualizer import fetch_treatments_bp
+from forgot_password_endpoints import forgot_password_bp
 
 app = Flask(__name__)
 CORS(app)
@@ -24,6 +26,8 @@ app.register_blueprint(signup_bp)
 app.register_blueprint(login_bp)
 app.register_blueprint(retreive_options_bp)
 app.register_blueprint(admin_console_bp)
+app.register_blueprint(fetch_treatments_bp)
+app.register_blueprint(forgot_password_bp)
 
 
 
