@@ -14,6 +14,8 @@ import openai
 import re
 import smtplib
 from twilio.rest import Client
+import asyncio
+import aiohttp
 
 
 class MasterTable:
@@ -40,33 +42,35 @@ class MasterTable:
         self.Disease_Area = disease_area
         self.Phase_Commencement_Date=phase_commencement_date
 
-def fetch_with_zyte(url):
+async def fetch_with_zyte(url):
     api_key = '674ce168a19e42d9ac0e039e9d9ded63'
-
+    
     # Define the request parameters
     request_params = {
         "url": url,
         "browserHtml": True,
         "actions": [
             {"action": "scrollBottom"},  # Scroll to the bottom to trigger loading
-            {"action": "waitForTimeout", "timeout": 15}  # Wait for 5000 ms after scroll
+            {"action": "waitForTimeout", "timeout": 15}  # Wait for 15 seconds after scroll
         ]
     }
 
-    # Make the API request
-    api_response = requests.post(
-        "https://api.zyte.com/v1/extract",
-        auth=(api_key, ""),
-        json=request_params
-    )
-
-    # Process the API response
-    if api_response.ok:
-        browser_html = api_response.json()["browserHtml"]
-        return browser_html
-    else:
-        print(f"Failed to retrieve HTML for {url}. Status code: {api_response.status_code}")
-        print("Response:", api_response.text)
+    # Asynchronously make the API request using aiohttp
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.zyte.com/v1/extract",
+            auth=aiohttp.BasicAuth(api_key, ''),
+            json=request_params
+        ) as response:
+            if response.status == 200:
+                api_response = await response.json()
+                browser_html = api_response.get("browserHtml")
+                return browser_html
+            else:
+                print(f"Failed to retrieve HTML for {url}. Status code: {response.status}")
+                text = await response.text()
+                print("Response:", text)
+                return None
 
 
 class MultilingualData:
@@ -177,13 +181,12 @@ def process_and_translate_row(treatment_data, cursor, treatment_key):
         logging.error(f"Error processing treatment with key {treatment_key}: {e}")
         raise
 
+#####################     Scraping Functions   ###############################
 
-
-
-def abbvie_pipeline():
+async def abbvie_pipeline():
     try:
         web = "https://www.abbvie.com/science/pipeline.html"
-        html_content = fetch_with_zyte(web)
+        html_content = await fetch_with_zyte(web)
 
         treatments = []
         processed_treatments = set()
@@ -256,10 +259,10 @@ def abbvie_pipeline():
         return [], None
 
 
-def bayer_pipeline():
+async def bayer_pipeline():
     try:
         web = "https://www.bayer.com/en/pharma/development-pipeline"
-        html_content = fetch_with_zyte(web)
+        html_content = await fetch_with_zyte(web)
 
         treatments = []
         processed_treatments = set()
@@ -323,10 +326,10 @@ def bayer_pipeline():
         return []
 
 
-def boehringer_ingelheim_pipeline():
+async def boehringer_ingelheim_pipeline():
     try:
         url = "https://www.boehringer-ingelheim.com/boehringer-ingelheim-human-pharma-clinical-pipeline-dynamic"
-        html_content = fetch_with_zyte(url)
+        html_content = await fetch_with_zyte(url)
         soup = BeautifulSoup(html_content, 'html.parser')
 
         treatments = []
@@ -404,9 +407,9 @@ def boehringer_ingelheim_pipeline():
         return []
 
 
-def bms_pipeline():
+async def bms_pipeline():
     url = "https://www.bms.com/researchers-and-partners/in-the-pipeline.html"
-    html_content = fetch_with_zyte(url)
+    html_content = await fetch_with_zyte(url)
     soup = BeautifulSoup(html_content, 'html.parser')
 
     treatments = []
@@ -516,10 +519,10 @@ def bms_pipeline():
     return treatments, html_content
 
 
-def gilead_pipeline():
+async def gilead_pipeline():
     try:
         url = "https://www.gilead.com/science-and-medicine/pipeline"
-        html_content = fetch_with_zyte(url)
+        html_content = await fetch_with_zyte(url)
         soup = BeautifulSoup(html_content, 'html.parser')
 
         treatments = []
@@ -621,10 +624,10 @@ def gilead_pipeline():
         return [], None
 
 
-def gsk_pipeline():
+async def gsk_pipeline():
     try:
         url = "https://www.gsk.com/en-gb/innovation/pipeline/"
-        html_content = fetch_with_zyte(url)
+        html_content = await fetch_with_zyte(url)
         soup = BeautifulSoup(html_content, 'html.parser')
 
         # Therapy area color mapping
@@ -708,10 +711,10 @@ def gsk_pipeline():
         return [], None
 
 
-def johnson_johnson_pipeline():
+async def johnson_johnson_pipeline():
     try:
         url = "https://www.investor.jnj.com/pipeline/development-pipeline/default.aspx"
-        html_content = fetch_with_zyte(url)
+        html_content = await fetch_with_zyte(url)
 
         soup = BeautifulSoup(html_content, 'html.parser')
         treatments = []
@@ -776,10 +779,10 @@ def johnson_johnson_pipeline():
         return [], None
 
 
-def merck_pipeline():
+async def merck_pipeline():
     try:
         url = "https://www.merck.com/research/product-pipeline/"
-        html_content = fetch_with_zyte(url)
+        html_content = await fetch_with_zyte(url)
         if html_content:
             soup = BeautifulSoup(html_content, 'html.parser')
             caption = soup.find('div', class_='pipeline-caption')
@@ -880,7 +883,7 @@ def merck_pipeline():
         return [], None
 
 
-def novartis_pipeline():
+async def novartis_pipeline():
     try:
         # Base URL and start page setup
         start_page = '0'
@@ -890,7 +893,7 @@ def novartis_pipeline():
         final_html = ""
 
         while True:
-            html = fetch_with_zyte(base_url + current_page)
+            html = await fetch_with_zyte(base_url + current_page)
             final_html += html
             treatments = parse_treatments_novartis(html)
             all_treatments.extend(treatments)
@@ -967,7 +970,7 @@ def novartis_pipeline():
         return [], None
 
 
-def novo_nordisk_pipeline():
+async def novo_nordisk_pipeline():
     try:
         # URL of the webpage to scrape
         web = "https://www.novonordisk.com/science-and-technology/r-d-pipeline.html"
@@ -1060,10 +1063,10 @@ def novo_nordisk_pipeline():
         return [], None
 
 
-def pfizer_pipeline():
+async def pfizer_pipeline():
     try:
         base_url = "https://www.pfizer.com/v1/pipeline/filter"
-        html_content = fetch_with_zyte(base_url)
+        html_content = await fetch_with_zyte(base_url)
 
         soup = BeautifulSoup(html_content, 'html.parser')
         date_element = soup.find('p', class_='pipeline-txt-date')
@@ -1164,7 +1167,7 @@ def pfizer_pipeline():
         return [], None
 
 
-def sanofi_pipeline():
+async def sanofi_pipeline():
     try:
         import requests
         from bs4 import BeautifulSoup
@@ -1239,7 +1242,7 @@ def sanofi_pipeline():
         print("An error occurred scraping Sanofi's pipeline:", e)
         return [], None
 
-def sanofi_pipeline_french():
+async def sanofi_pipeline_french():
     try:
         import requests
         from bs4 import BeautifulSoup
@@ -1316,11 +1319,10 @@ def sanofi_pipeline_french():
         return [], None
 
 
-
-def teva_pipeline():
+async def teva_pipeline():
     try:
         web = "https://www.tevapharm.com/product-focus/research/pipeline/"
-        html_content = fetch_with_zyte(web)
+        html_content = await fetch_with_zyte(web)
         treatments = []
         processed_treatments = set()
 
@@ -1446,10 +1448,10 @@ def teva_pipeline():
         print("An error occurred scraping Teva Pharmaceutical's pipeline", e)
         return []
     
-def astrazeneca_pipeline():
+async def astrazeneca_pipeline():
     try:
         web = "https://www.astrazeneca.com/our-therapy-areas/pipeline.html"
-        html_content = fetch_with_zyte(web)
+        html_content = await fetch_with_zyte(web)
         treatments = []
         processed_treatments = set()
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -1546,10 +1548,10 @@ def astrazeneca_pipeline():
         print("An error occurred scraping AstraZeneca's Pharmaceutical's pipeline", e)
         return []
 
-def amgen_pipeline():
+async def amgen_pipeline():
     try:
         web = "https://www.amgenpipeline.com/"
-        html_content = fetch_with_zyte(web)
+        html_content = await fetch_with_zyte(web)
         treatments = []
         processed_treatments = set()
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -1650,8 +1652,6 @@ def amgen_pipeline():
             print("An error occurred scraping AstraZeneca's Pharmaceutical's pipeline", e)
             return []
 
-
-
 # Function that cleans a string
 def clean_text_merck(text):
     text = re.sub(r'[\n\t]+', ' ', text)
@@ -1720,7 +1720,7 @@ def generate_identification_key(company, treatment_name, indication, phase=None)
     return f"{company}_{treatment_name}_{indication}{phase_number}".replace(" ", "_")
 
 
-def table_insertion(treatments, html_content, company_name):
+async def table_insertion(treatments, html_content, company_name):
     # Connection parameters
     server = 'scrapedtreatmentsdatabase.database.windows.net'
     database = 'scrapedtreatmentssqldatabase'
@@ -1791,7 +1791,7 @@ def table_insertion(treatments, html_content, company_name):
             connection.close()
 
 
-def clear_remake_tables():
+async def clear_remake_tables():
     server = 'scrapedtreatmentsdatabase.database.windows.net'
     database = 'scrapedtreatmentssqldatabase'
     username = 'mzandi'
@@ -1845,16 +1845,14 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 @app.function_name(name="ScrapeAndProcessTrigger")
 @app.route(route="scrape_and_process_trigger")
-def scrape_and_process_trigger(req: func.HttpRequest) -> func.HttpResponse:
-    import azure.functions as func_two
-    
+async def scrape_and_process_trigger(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function for scraping and processing started.')
 
     try:
         logging.info("Starting clear_remake_tables function.")
-        clear_remake_tables()
+        await clear_remake_tables()  # This function can stay synchronous if it's simple enough.
         logging.info("Finished clear_remake_tables function.")
-        
+
         # Database connection setup
         server = 'scrapedtreatmentsdatabase.database.windows.net'
         database = 'scrapedtreatmentssqldatabase'
@@ -1878,76 +1876,60 @@ def scrape_and_process_trigger(req: func.HttpRequest) -> func.HttpResponse:
         
         if cursor.rowcount == 0:
             logging.info("This time slot has already been processed or is currently being processed.")
-            return func_two.HttpResponse("Time slot already processed or in progress", status_code=202)
+            return func.HttpResponse("Time slot already processed or in progress", status_code=202)
 
         # If we got here, we've acquired the lock. Proceed with scraping.
         cursor.execute("SELECT Scraping_Objects FROM Calendar WHERE Time = ?", (current_time,))
         result = cursor.fetchone()
 
-        processed_any = False  # Flag to check if any scraping object was processed
-
         if result:
             scraping_objects = json.loads(result[0])
             logging.info(f"Scraping objects found: {scraping_objects}")
-            
+
+            # Create a list to hold asynchronous scraping tasks
+            scraping_tasks = []
+
             for obj in scraping_objects:
                 object_code = obj['objectCode']
                 logging.info(f"Object Code: {object_code}")
-                
-                # Attempt to find the function by name
-                func_three = globals().get(object_code)
-                
-                if func_three:
-                    try:
-                        logging.info(f"Executing function for {object_code}")
-                        # Call the scraping function
-                        data, content = func_three()  # Assuming each scraping function returns a tuple (data, content)
-                        
-                        # Extract the first word from objectDescription for the table name
-                        table_name = obj['objectDescription'].split()[0]
-                        
-                        # Call the table insertion function
-                        logging.info(f'Inserting data for {table_name}...')
-                        table_insertion(data, content, table_name)
-                        processed_any = True  # Set flag to True if processing was successful
-                    except Exception as e:
-                        logging.error(f"Error processing {object_code}: {e}")
-                        continue  # Continue to the next function even if there is an error
+
+                # Attempt to find the scraping function by name
+                scraping_function = globals().get(object_code)
+
+                if scraping_function:
+                    # Add the async scraping function to the list of tasks
+                    scraping_tasks.append(
+                        asyncio.create_task(run_scraping_function(scraping_function, obj))
+                    )
                 else:
                     logging.error(f"No function matched for {object_code}")
+
+            # Run all scraping tasks concurrently
+            await asyncio.gather(*scraping_tasks)
+
+            # If we have successfully processed any data, update the ProcessingStatus table
+            if scraping_tasks:
+                cursor.execute("UPDATE ProcessingStatus SET status = 1")
+                conn.commit()
+                logging.info("Data processed successfully.")
+                return func.HttpResponse(
+                    json.dumps({"status": "success", "message": "Data processed successfully."}),
+                    status_code=200
+                )
+            else:
+                logging.info("No data was processed.")
+                return func.HttpResponse(
+                    json.dumps({"status": "no_data", "message": "No data processed."}),
+                    status_code=200
+                )
+
         else:
             logging.info("No matching objects found in the Calendar table.")
-        
-        # If any processing was successful, set the status to True
-        if processed_any:
-            cursor.execute("UPDATE ProcessingStatus SET status = 1")
-
-        # Do not reset the Check flag after processing
-        # The [Check] = 1 state will persist, indicating this time slot has been processed
-        conn.commit()
-
-        # Attempt to return a successful response
-        try:
-            return func_two.HttpResponse(
-                json.dumps({
-                    "status": "success" if processed_any else "no_data", 
-                    "message": "Data processed successfully." if processed_any else "No data processed."
-                }),
-                status_code=200
-            )
-        except AttributeError as e:
-            logging.error(f"AttributeError encountered: {e}")
-            return func_two.HttpResponse(
-                json.dumps({
-                    "status": "success_with_error",
-                    "message": "Data processed, but an AttributeError occurred."
-                }),
-                status_code=200
-            )
+            return func.HttpResponse("No scraping objects found", status_code=204)
 
     except Exception as e:
         logging.error(f"Error processing data: {e}")
-        return func_two.HttpResponse(
+        return func.HttpResponse(
             f"Error processing data: {e}",
             status_code=500
         )
@@ -1957,7 +1939,15 @@ def scrape_and_process_trigger(req: func.HttpRequest) -> func.HttpResponse:
         if conn:
             conn.close()
 
-
+async def run_scraping_function(scraping_function, obj):
+    try:
+        logging.info(f"Executing scraping function for {obj['objectCode']}")
+        data, content = await scraping_function()  # Ensure all scraping functions are async
+        table_name = obj['objectDescription'].split()[0]
+        await table_insertion(data, content, table_name)  # Ensure table insertion is async
+        await asyncio.sleep(3)  # Introduce a small delay between function calls
+    except Exception as e:
+        logging.error(f"Error processing {obj['objectCode']}: {e}")
 
 @app.function_name(name="TranslateAndNotifyTrigger")
 @app.route(route="translate_and_notify_trigger")
@@ -1978,7 +1968,7 @@ def translate_and_notify_trigger(req: func.HttpRequest) -> func.HttpResponse:
         cursor = conn.cursor()
 
         # Set the current time to the nearest hour
-        current_time = round_down_time(datetime.now(timezone.utc), round_to=60)
+        current_time = round_down_time(datetime.now(timezone.utc), round_to=5)
         logging.info(f"Rounded down time: {current_time}")
 
         # Check if the row in the Calendar has Check = 1 and ProcessingStatus = 1
@@ -2149,7 +2139,7 @@ def trigger_notifications():
         # Set up the LLM chain
         llm_chain = prompt_template | llm
 
-        # Database connection setup
+        # Database connection setup (unchanged)
         server = 'scrapedtreatmentsdatabase.database.windows.net'
         database = 'scrapedtreatmentssqldatabase'
         username = 'mzandi'
@@ -2168,7 +2158,7 @@ def trigger_notifications():
 
         # Convert data to dictionaries for easier comparison
         data_dict = {row[0]: json.loads(row[1]) for row in all_data}
-        logging.info(f"Fetched {data_dict} treatment records for comparison")
+        logging.info(f"Fetched {len(data_dict)} treatment records for comparison")
 
         # Compare records and update notifications
         for treatment_key, treatment_list in data_dict.items():
@@ -2182,33 +2172,37 @@ def trigger_notifications():
                 previous_record = treatment_list[-2]
                 previous_date, previous_details = list(previous_record.items())[0]
 
-                # Convert objects to JSON strings for the prompt
-                old_object_json = json.dumps(previous_details, indent=2)
-                new_object_json = json.dumps(latest_details, indent=2)
+                # Check if there are any changes between previous and latest details
+                if has_changes(previous_details, latest_details):
+                    # Convert objects to JSON strings for the prompt
+                    old_object_json = json.dumps(previous_details, indent=2)
+                    new_object_json = json.dumps(latest_details, indent=2)
 
-                # Run the LLM chain with the old and new objects
-                response = llm_chain.invoke({
-                    "old_object": old_object_json,
-                    "new_object": new_object_json
-                })
+                    # Run the LLM chain with the old and new objects
+                    response = llm_chain.invoke({
+                        "old_object": old_object_json,
+                        "new_object": new_object_json
+                    })
 
-                # Extract the JSON content from the response
-                json_content = extract_json_from_response(response.content)
+                    # Extract the JSON content from the response
+                    json_content = extract_json_from_response(response.content)
 
-                # Ensure json_content is a dictionary before processing
-                if isinstance(json_content, str):
-                    try:
-                        json_content = json.loads(json_content)
-                    except json.JSONDecodeError:
-                        logging.error(f"Failed to parse JSON content: {json_content}")
-                        continue
+                    # Ensure json_content is a dictionary before processing
+                    if isinstance(json_content, str):
+                        try:
+                            json_content = json.loads(json_content)
+                        except json.JSONDecodeError:
+                            logging.error(f"Failed to parse JSON content: {json_content}")
+                            continue
 
-                # Insert stream data with dictionaries
-                insert_stream_data(conn, json_content, previous_details, latest_details)
+                    # Insert stream data with dictionaries
+                    insert_stream_data(conn, json_content, previous_details, latest_details)
 
-                # Add the notification description to the App_Notification
-                latest_details['App_Notification'] = json.dumps([{"en": json_content}], ensure_ascii=False)
-
+                    # Add the notification description to the App_Notification
+                    latest_details['App_Notification'] = json.dumps([{"en": json_content}], ensure_ascii=False)
+                else:
+                    logging.info(f"No changes detected for treatment {treatment_key}. Skipping OpenAI call.")
+                    latest_details['App_Notification'] = json.dumps([{"en": "No changes detected."}], ensure_ascii=False)
             else:
                 latest_details['App_Notification'] = json.dumps([{"en": "No previous record for comparison."}], ensure_ascii=False)
 
@@ -2230,6 +2224,17 @@ def trigger_notifications():
             cursor.close()
         if conn:
             conn.close()
+
+def has_changes(old_details, new_details):
+    # Define keys to ignore during comparison
+    ignore_keys = ['Date_Scraped', 'App_Notification']
+    
+    # Compare all keys except the ignored ones
+    for key in old_details.keys():
+        if key not in ignore_keys:
+            if old_details.get(key) != new_details.get(key):
+                return True
+    return False
 
 
 def create_stream_table(conn):
