@@ -1651,6 +1651,287 @@ async def amgen_pipeline():
     except Exception as e:
             print("An error occurred scraping AstraZeneca's Pharmaceutical's pipeline", e)
             return []
+    
+
+async def vertex_pipeline():
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime, timezone
+
+        url = 'https://www.vrtx.com/our-science/pipeline/'
+        response = requests.get(url)
+        response.raise_for_status()
+
+        html = response.text
+        soup = BeautifulSoup(html, 'html.parser')
+
+        treatments = []
+        processed_treatments = set()  # Set to track unique treatments
+
+        sections = soup.find_all('div', class_='field__item')
+
+        for section in sections:
+            therapeutic_area_tag = section.select_one('span.field--name-name')
+            therapeutic_area = therapeutic_area_tag.text.strip() if therapeutic_area_tag else "N/A"
+
+            treatment_items = section.find_all('div', class_='paragraph--type--hww-medicine')
+
+            for treatment in treatment_items:
+                name_tag = treatment.select_one('button.field--name-field-hww-headline > span')
+                name = name_tag.text.strip() if name_tag else "N/A"
+
+                phase_tag = treatment.select_one('div.field--name-field-hww-phases')
+                phase = "N/A"
+                if phase_tag:
+                    classes = phase_tag.get('class', [])
+                    for class_name in classes:
+                        if class_name.startswith('phase-'):
+                            phase = class_name.replace('phase-', 'Phase ')
+                            if phase == "Phase p":
+                                phase = "Research"
+                            if phase == "Phase 12":
+                                phase = "Phase 1/2"
+
+                description_tag = treatment.select_one('div.field--name-field-hww-body > p')
+                description = description_tag.text.strip() if description_tag else "N/A"
+
+                name = clean_text(name)
+                therapeutic_area = clean_text(therapeutic_area)
+                description = clean_text(description)
+
+                identification_key = generate_identification_key("Vertex", name, therapeutic_area, phase)
+                date_scraped = datetime.now(timezone.utc)
+
+                treatment_key = (name, therapeutic_area, phase, description)
+
+                therapeutic_area_translator = MultilingualData()
+                description_translator = MultilingualData()
+
+                therapeutic_area_translator.add_translation('en', therapeutic_area)
+                description_translator.add_translation('en', description)
+
+                therapeutic_area_collection = MultilingualDataCollection()
+                description_collection = MultilingualDataCollection()
+
+                therapeutic_area_collection.add_data(therapeutic_area_translator)
+                description_collection.add_data(description_translator)
+
+                if treatment_key not in processed_treatments:
+                    master_record = MasterTable(
+                        company_name="Vertex",
+                        treatment_name=name,
+                        therapeutic_area=str(therapeutic_area_collection.get_collection_as_json()),
+                        phase=phase,
+                        notes=str(description_collection.get_collection_as_json()),
+                        identification_key=identification_key,
+                        date_scraped=date_scraped
+                    )
+                    treatments.append(master_record.__dict__)  # Append the dictionary representation
+                    processed_treatments.add(treatment_key)
+
+        return treatments, html
+    except Exception as e:
+        print("An error occurred scraping Vertex's pipeline:", e)
+        return [], None
+
+async def regeneron_pipeline():
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime, timezone
+
+        # URL of the webpage to scrape
+        url = 'https://www.regeneron.com/pipeline-medicines/investigational-pipeline'
+        response = requests.get(url)
+        response.raise_for_status()  # Ensure the request was successful
+
+        html = response.text
+
+
+        # Parse the HTML content using BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        treatments = []
+        processed_treatments = set()  # Set to track unique treatments
+
+        # Find all phase sections
+        phases = soup.find_all('div', class_='pipeline-accordion filter-phase')
+
+        for phase_section in phases:
+            phase_header = phase_section.select_one('div.pipeline-accordion-header > h3 > button')
+            phase_name = phase_header.text.strip() if phase_header else "Null"
+
+            # Find all treatment items within this phase
+            treatment_items = phase_section.find_all('li', class_='pipeline-accordion-content-item')
+
+            for treatment in treatment_items:
+                # Extracting fields, default to "Null" if not present
+                molecule_name = treatment.select_one('div.molecule > h5')
+                molecule_name = molecule_name.text.strip() if molecule_name else "Null"
+
+                therapeutic_area = treatment.select_one('div.area > p')
+                therapeutic_area = therapeutic_area.text.strip() if therapeutic_area else "Null"
+
+                modality = treatment.select_one('div.modality > p')
+                modality = modality.text.strip() if modality else "Null"
+
+                indication = treatment.select_one('div.indication > p')
+                indication = indication.text.strip() if indication else "Null"
+
+                target = treatment.select_one('div.target > p')
+                target = target.text.strip() if target else "Null"
+
+                # Clean the text (you can implement this function or adapt based on your logic)
+                molecule_name = clean_text(molecule_name)
+                therapeutic_area = clean_text(therapeutic_area)
+                modality = clean_text(modality)
+                indication = clean_text(indication)
+                target = clean_text(target)
+
+                # Generate a unique identification key
+                identification_key = generate_identification_key("Regeneron", molecule_name, indication, phase_name)
+                date_scraped = datetime.now(timezone.utc)
+
+                # Generate a unique treatment key to avoid duplicates
+                treatment_key = (molecule_name, indication, phase_name, therapeutic_area, modality, target)
+
+                # Translators and collections for multilingual support
+                indication_translator = MultilingualData()
+                therapeutic_area_translator = MultilingualData()
+                target_translator = MultilingualData()
+
+                indication_translator.add_translation('en', indication)
+                therapeutic_area_translator.add_translation('en', therapeutic_area)
+                target_translator.add_translation('en', target)
+
+                indication_collection = MultilingualDataCollection()
+                therapeutic_area_collection = MultilingualDataCollection()
+                target_collection = MultilingualDataCollection()
+
+                indication_collection.add_data(indication_translator)
+                therapeutic_area_collection.add_data(therapeutic_area_translator)
+                target_collection.add_data(target_translator)
+
+                if treatment_key not in processed_treatments:
+                    # Create master record for the treatment using only the available fields
+                    master_record = MasterTable(
+                        company_name="Regeneron",
+                        treatment_name=molecule_name,
+                        indication=str(indication_collection.get_collection_as_json()),
+                        therapeutic_area=str(therapeutic_area_collection.get_collection_as_json()),
+                        phase=phase_name,
+                        target=str(target_collection.get_collection_as_json()),
+                        modality=modality,
+                        identification_key=identification_key,
+                        date_scraped=date_scraped
+                    )
+                    treatments.append(master_record.__dict__)  # Append the dictionary representation
+                    processed_treatments.add(treatment_key)
+
+        # Return treatments and HTML for any further use
+        return treatments, html
+
+    except Exception as e:
+        print(f"An error occurred scraping Regeneron's pipeline: {e}")
+        return [], None
+
+async def csl_pipeline():
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime, timezone
+
+        # URL of the webpage to scrape
+        url = 'https://www.csl.com/research-and-development/product-pipeline'
+        response = requests.get(url)
+        response.raise_for_status()
+
+        html = response.text
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        treatments = []
+        processed_treatments = set()
+
+        # Find all phase sections
+        phase_sections = soup.find_all('div', class_='category-phase')
+
+        # Loop through each phase section
+        for phase_section in phase_sections:
+            phase_name = phase_section.select_one('div.phase').text.strip() if phase_section.select_one('div.phase') else "Unknown Phase"
+
+            # Find all treatments under this phase
+            treatment_sections = phase_section.find_all('a', class_='p-item')
+
+            for treatment in treatment_sections:
+                treatment_name = treatment.select_one('p.p-name').text.strip() if treatment.select_one('p.p-name') else "N/A"
+                description = treatment.select_one('p.p-content').text.strip() if treatment.select_one('p.p-content') else "N/A"
+                data_color = treatment.get('data-color', 'Unknown')  # Extracting data-color for mapping therapeutic area
+                therapeutic_area = "Practice Therapeutic Area"  # Placeholder for now
+                
+                # Mapping data_color to therapeutic areas
+                if data_color == "#03b3be":
+                    therapeutic_area = "Immunology"
+                if data_color == "#ce2052":
+                    therapeutic_area = "Hematology"
+                if data_color == "#97a81f":
+                    therapeutic_area = "Cardiovascular and Metabolic"
+                if data_color == "#0e56a5":
+                    therapeutic_area = "Nephrology and Transplant"
+                if data_color == "#f06125":
+                    therapeutic_area = "Respiratory"
+                if data_color == "#7030a0":
+                    therapeutic_area = "Vaccines"
+                if data_color == "#00a28a":
+                    therapeutic_area = "CSL Vifor"
+                if data_color == "#cccccc":
+                    therapeutic_area = "Outlicensed Programs"
+
+                # Clean text fields
+                treatment_name = clean_text(treatment_name)
+                therapeutic_area = clean_text(therapeutic_area)
+                description = clean_text(description)
+
+                # Generate a unique identification key
+                identification_key = generate_identification_key("CSL", treatment_name, therapeutic_area, phase_name)
+                date_scraped = datetime.now(timezone.utc)
+
+                # Multilingual support
+                description_translator = MultilingualData()
+                therapeutic_area_translator = MultilingualData()
+
+                description_translator.add_translation('en', description)
+                therapeutic_area_translator.add_translation('en', therapeutic_area)
+
+                description_collection = MultilingualDataCollection()
+                therapeutic_area_collection = MultilingualDataCollection()
+
+                description_collection.add_data(description_translator)
+                therapeutic_area_collection.add_data(therapeutic_area_translator)
+
+                # Create a unique treatment key to avoid duplicates
+                treatment_key = (treatment_name, therapeutic_area, phase_name)
+
+                if treatment_key not in processed_treatments:
+                    master_record = MasterTable(
+                        company_name="CSL",
+                        treatment_name=treatment_name,
+                        therapeutic_area=str(therapeutic_area_collection.get_collection_as_json()),
+                        phase=phase_name,
+                        notes=str(description_collection.get_collection_as_json()),  # Adding description to "notes"
+                        identification_key=identification_key,
+                        date_scraped=date_scraped
+                    )
+                    treatments.append(master_record.__dict__)  # Store as dict
+                    processed_treatments.add(treatment_key)
+
+        return treatments, html
+
+    except Exception as e:
+        print(f"An error occurred scraping CSL's pipeline: {e}")
+        return [], None
+
 
 # Function that cleans a string
 def clean_text_merck(text):
