@@ -43,7 +43,6 @@ class MasterTable:
         self.Phase_Commencement_Date=phase_commencement_date
 
 async def fetch_with_zyte(url):
-    api_key = '674ce168a19e42d9ac0e039e9d9ded63'
     
     # Define the request parameters
     request_params = {
@@ -2380,8 +2379,7 @@ def trigger_notifications():
     cursor = None
     try:
         # Initialize OpenAI API and LLM
-        openai.api_key = "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"
-        llm = ChatOpenAI(temperature=0, model="gpt-4o", openai_api_key="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")
+
         
         # Define the prompt template
         prompt_template = PromptTemplate(
